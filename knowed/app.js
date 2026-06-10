@@ -44,8 +44,56 @@ const C = {
   font:    "-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif",
 };
 
-const TYPE_COLOR = { xlsx:'#1a7a4a', pdf:'#c0392b', csv:'#2563eb' };
-const TYPE_ICON  = { xlsx:'ti-table', pdf:'ti-file-text', csv:'ti-file-spreadsheet' };
+const TYPE_COLOR  = { xlsx:'#1a7a4a', pdf:'#c0392b', csv:'#2563eb' };
+const TYPE_ICON   = { xlsx:'ti-table', pdf:'ti-file-text', csv:'ti-file-spreadsheet' };
+const GRAPH_COLOR = { xlsx:'#34a853', pdf:'#ea4335', csv:'#4285f4' };
+
+// ── 3D graph math ─────────────────────────────────────────────────────────────
+
+const _rotY = (p, a) => ({
+  x:  p.x * Math.cos(a) + p.z * Math.sin(a),
+  y:  p.y,
+  z: -p.x * Math.sin(a) + p.z * Math.cos(a),
+});
+const _rotX = (p, a) => ({
+  x:  p.x,
+  y:  p.y * Math.cos(a) - p.z * Math.sin(a),
+  z:  p.y * Math.sin(a) + p.z * Math.cos(a),
+});
+const _proj = (p, cx, cy, fl = 480) => {
+  const s = fl / (fl + p.z + 220);
+  return { x: cx + p.x * s, y: cy + p.y * s, s };
+};
+
+const _fibSphere = (n, r) => {
+  const pts = [], phi = Math.PI * (1 + Math.sqrt(5));
+  for (let i = 0; i < n; i++) {
+    const y  = 1 - (i / Math.max(n - 1, 1)) * 2;
+    const rr = Math.sqrt(Math.max(0, 1 - y * y));
+    const t  = phi * i;
+    pts.push({ x: Math.cos(t) * rr * r, y: y * r, z: Math.sin(t) * rr * r });
+  }
+  return pts;
+};
+
+const _computeEdges = () => {
+  const co = {};
+  CHAT_HISTORY.forEach(msg => {
+    if (!msg.sources || msg.sources.length < 2) return;
+    for (let i = 0; i < msg.sources.length; i++)
+      for (let j = i + 1; j < msg.sources.length; j++) {
+        const k = [msg.sources[i], msg.sources[j]].sort().join('|');
+        co[k] = (co[k] || 0) + 1;
+      }
+  });
+  return Object.entries(co).map(([k, w]) => {
+    const [a, b] = k.split('|');
+    return { from: a, to: b, weight: w };
+  });
+};
+
+const GRAPH_EDGES   = _computeEdges();
+const GRAPH_BASE_3D = _fibSphere(documents.length, 160);
 
 // ── Type badge ────────────────────────────────────────────────────────────────
 
@@ -59,10 +107,10 @@ function TypeBadge({ type }) {
   );
 }
 
-// ── Message bubble (shared by QueryPage) ──────────────────────────────────────
+// ── Message bubble ────────────────────────────────────────────────────────────
 
 function MessageBubble({ msg }) {
-  const isUser = msg.role === 'user';
+  const isUser  = msg.role === 'user';
   const srcDocs = msg.sources
     ? msg.sources.map(id => documents.find(d => d.id === id)).filter(Boolean)
     : [];
@@ -115,22 +163,19 @@ function MessageBubble({ msg }) {
 const NAV = [
   { icon:'ti-files',        label:'Documents', key:'documents' },
   { icon:'ti-chart-bar',    label:'Graphs',    key:'graphs'    },
-  { icon:'ti-messages',      label:'Chat',      key:'chat'      },
+  { icon:'ti-messages',     label:'Chat',      key:'chat'      },
   { icon:'ti-shield-check', label:'Policies',  key:'policies'  },
 ];
 
 function DocItem({ doc, selected, onToggle }) {
   const isSel = selected.includes(doc.id);
   return (
-    <div
-      onClick={() => onToggle(doc.id)}
-      style={{
-        display:'flex', alignItems:'center', gap:'7px',
-        padding:'5px 10px', margin:'1px 6px', borderRadius:'6px', cursor:'pointer',
-        background: isSel ? C.accent+'12' : 'transparent',
-        border: isSel ? '0.5px solid '+C.accent+'35' : '0.5px solid transparent',
-      }}
-    >
+    <div onClick={() => onToggle(doc.id)} style={{
+      display:'flex', alignItems:'center', gap:'7px',
+      padding:'5px 10px', margin:'1px 6px', borderRadius:'6px', cursor:'pointer',
+      background: isSel ? C.accent+'12' : 'transparent',
+      border: isSel ? '0.5px solid '+C.accent+'35' : '0.5px solid transparent',
+    }}>
       <i className={'ti '+(TYPE_ICON[doc.type]||'ti-file')}
          style={{ fontSize:'13px', color:TYPE_COLOR[doc.type]||C.muted, flexShrink:0 }} />
       <span style={{
@@ -174,8 +219,7 @@ function Sidebar({ page, onNav, selected, onToggle }) {
             position:'absolute', left:'8px', top:'50%', transform:'translateY(-50%)',
             fontSize:'13px', color:C.muted, pointerEvents:'none',
           }} />
-          <input
-            type="text" placeholder="Search docs…" value={search}
+          <input type="text" placeholder="Search docs…" value={search}
             onChange={e => setSearch(e.target.value)}
             style={{
               width:'100%', boxSizing:'border-box',
@@ -250,24 +294,19 @@ function Sidebar({ page, onNav, selected, onToggle }) {
 // ── Topbar ────────────────────────────────────────────────────────────────────
 
 function Topbar({ selected, onRemove, onClearAll, llm, onLlmChange }) {
-  const n = selected.length;
+  const n       = selected.length;
   const selDocs = documents.filter(d => selected.includes(d.id));
-
-  const badge = n === 0 ? null
+  const badge   = n === 0 ? null
     : n < 3
-      ? { label:`${n} doc${n>1?'s':''} selected`, color:C.muted,   bg:C.surface,       icon:null }
-      : { label:`Graph ready · ${n} docs`,         color:C.accent,  bg:C.accent+'12',   icon:'ti-vector-triangle' };
+      ? { label:`${n} doc${n>1?'s':''} selected`, color:C.muted,  bg:C.surface,     icon:null }
+      : { label:`Graph ready · ${n} docs`,         color:C.accent, bg:C.accent+'12', icon:'ti-vector-triangle' };
 
   return (
     <div style={{
       height:'48px', flexShrink:0, background:C.bg, borderBottom:C.border,
       display:'flex', alignItems:'center', padding:'0 16px', gap:'8px', fontFamily:C.font,
     }}>
-      {/* Pills */}
-      <div style={{
-        flex:1, display:'flex', alignItems:'center', gap:'6px',
-        overflow:'hidden', minWidth:0,
-      }}>
+      <div style={{ flex:1, display:'flex', alignItems:'center', gap:'6px', overflow:'hidden', minWidth:0 }}>
         {n === 0
           ? <span style={{ fontSize:'12px', color:C.muted }}>
               Select documents from the sidebar to cross-reference
@@ -289,7 +328,6 @@ function Topbar({ selected, onRemove, onClearAll, llm, onLlmChange }) {
         }
       </div>
 
-      {/* Clear all */}
       {n >= 2 && (
         <button onClick={onClearAll} style={{
           flexShrink:0, padding:'4px 10px', fontSize:'11px', fontWeight:500,
@@ -298,7 +336,6 @@ function Topbar({ selected, onRemove, onClearAll, llm, onLlmChange }) {
         }}>Clear all</button>
       )}
 
-      {/* Status badge */}
       {badge && (
         <div style={{
           flexShrink:0, display:'flex', alignItems:'center', gap:'5px',
@@ -311,7 +348,6 @@ function Topbar({ selected, onRemove, onClearAll, llm, onLlmChange }) {
         </div>
       )}
 
-      {/* LLM selector */}
       <select value={llm} onChange={e => onLlmChange(e.target.value)} style={{
         flexShrink:0, fontSize:'12px', padding:'5px 10px',
         border:C.border, borderRadius:'7px',
@@ -327,7 +363,7 @@ function Topbar({ selected, onRemove, onClearAll, llm, onLlmChange }) {
   );
 }
 
-// ── Documents page (table always 100%) ────────────────────────────────────────
+// ── Documents page ────────────────────────────────────────────────────────────
 
 function DocumentsPage({ selected, onToggle }) {
   return (
@@ -391,9 +427,9 @@ function DocumentsPage({ selected, onToggle }) {
   );
 }
 
-// ── Query page (full-width GPT-style chat) ────────────────────────────────────
+// ── Chat page ─────────────────────────────────────────────────────────────────
 
-function QueryPage({ selected, onRemove, llm, onTrackQuery }) {
+function ChatPage({ selected, onRemove, llm, onTrackQuery }) {
   const [messages, setMessages] = useState([...CHAT_HISTORY]);
   const [input,    setInput]    = useState('');
   const bottomRef = useRef(null);
@@ -430,8 +466,7 @@ function QueryPage({ selected, onRemove, llm, onTrackQuery }) {
       {/* Context band */}
       <div style={{
         padding:'8px 20px', borderBottom:C.border, flexShrink:0,
-        display:'flex', alignItems:'center', gap:'8px',
-        overflowX:'auto',
+        display:'flex', alignItems:'center', gap:'8px', overflowX:'auto',
       }}>
         <span style={{ fontSize:'11px', color:C.muted, flexShrink:0 }}>Context:</span>
         {selected.length === 0 && (
@@ -468,13 +503,11 @@ function QueryPage({ selected, onRemove, llm, onTrackQuery }) {
         </div>
       </div>
 
-      {/* Input area */}
+      {/* Input */}
       <div style={{ padding:'12px 20px 20px', flexShrink:0 }}>
         <div style={{ maxWidth:'720px', margin:'0 auto' }}>
           <div style={{ position:'relative' }}>
-            <textarea
-              rows={1}
-              value={input}
+            <textarea rows={1} value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={onKeyDown}
               placeholder="Ask about these documents…"
@@ -487,23 +520,16 @@ function QueryPage({ selected, onRemove, llm, onTrackQuery }) {
                 color:C.text, fontFamily:C.font,
               }}
             />
-            <button
-              onClick={send}
-              disabled={!input.trim()}
-              style={{
-                position:'absolute', right:'10px', bottom:'10px',
-                width:'32px', height:'32px', borderRadius:'50%', border:'none',
-                background: input.trim() ? C.accent : '#d1d1d6',
-                cursor: input.trim() ? 'pointer' : 'default',
-                display:'flex', alignItems:'center', justifyContent:'center',
-                transition:'background 0.15s',
-              }}
-            >
+            <button onClick={send} disabled={!input.trim()} style={{
+              position:'absolute', right:'10px', bottom:'10px',
+              width:'32px', height:'32px', borderRadius:'50%', border:'none',
+              background: input.trim() ? C.accent : '#d1d1d6',
+              cursor: input.trim() ? 'pointer' : 'default',
+              display:'flex', alignItems:'center', justifyContent:'center',
+            }}>
               <i className="ti ti-arrow-up" style={{ fontSize:'14px', color:'#fff' }} />
             </button>
           </div>
-
-          {/* Footer */}
           <div style={{
             display:'flex', alignItems:'center', justifyContent:'center', gap:'5px',
             padding:'8px 0 0', fontSize:'11px', color:C.muted,
@@ -513,6 +539,239 @@ function QueryPage({ selected, onRemove, llm, onTrackQuery }) {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Graphs page (3D canvas) ───────────────────────────────────────────────────
+
+function GraphsPage({ selected, onToggle }) {
+  const canvasRef  = useRef(null);
+  const selRef     = useRef(selected);
+  const toggleRef  = useRef(onToggle);
+  const projRef    = useRef([]);
+  const st         = useRef({ ry:0.5, rx:0.2, drag:null, hover:null, dragged:false });
+
+  useEffect(() => { selRef.current    = selected; }, [selected]);
+  useEffect(() => { toggleRef.current = onToggle; }, [onToggle]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    let raf;
+
+    const dpr    = () => window.devicePixelRatio || 1;
+    const resize = () => {
+      const d = dpr(), r = canvas.getBoundingClientRect();
+      canvas.width  = r.width  * d;
+      canvas.height = r.height * d;
+    };
+
+    const draw = () => {
+      const d   = dpr();
+      const ctx = canvas.getContext('2d');
+      const W   = canvas.width, H = canvas.height;
+      const cx  = W / 2, cy = H / 2;
+      ctx.clearRect(0, 0, W, H);
+
+      // Gentle auto-rotation when idle
+      if (!st.current.drag) st.current.ry += 0.004;
+
+      // Transform 3D positions
+      const t  = GRAPH_BASE_3D.map(p => _rotX(_rotY(p, st.current.ry), st.current.rx));
+      const pr = t.map(p => _proj(p, cx, cy));
+      projRef.current = pr;
+
+      // Draw order: back → front
+      const ord = documents.map((_, i) => i).sort((a, b) => t[a].z - t[b].z);
+
+      // Edges
+      GRAPH_EDGES.forEach(e => {
+        const ai = documents.findIndex(d => d.id === e.from);
+        const bi = documents.findIndex(d => d.id === e.to);
+        if (ai < 0 || bi < 0) return;
+        ctx.beginPath();
+        ctx.moveTo(pr[ai].x, pr[ai].y);
+        ctx.lineTo(pr[bi].x, pr[bi].y);
+        ctx.strokeStyle = '#d1d1d6';
+        ctx.lineWidth   = (e.weight + 0.5) * d;
+        ctx.stroke();
+      });
+
+      // Nodes
+      const sel = selRef.current;
+      ord.forEach(i => {
+        const doc   = documents[i];
+        const p     = pr[i];
+        const depth = Math.min(1, Math.max(0, (t[i].z + 200) / 400));
+        const r     = (20 + doc.weight * 20) * p.s * d;
+        const isSel = sel.includes(doc.id);
+        const isHov = st.current.hover === i;
+
+        // Fill
+        ctx.globalAlpha = 0.5 + depth * 0.5;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = GRAPH_COLOR[doc.type] || '#888888';
+        ctx.fill();
+
+        // Selection / hover ring
+        if (isSel || isHov) {
+          ctx.globalAlpha = 1;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, r + 3 * d, 0, Math.PI * 2);
+          ctx.strokeStyle = isSel ? '#0071e3' : '#555555';
+          ctx.lineWidth   = 2 * d;
+          ctx.stroke();
+        }
+
+        // Label
+        const lbl = doc.name.length > 14 ? doc.name.slice(0, 13) + '…' : doc.name;
+        const fs  = Math.max(9 * d, Math.round(11 * p.s * d));
+        ctx.globalAlpha = 0.45 + depth * 0.55;
+        ctx.font        = `${fs}px -apple-system, BlinkMacSystemFont, sans-serif`;
+        ctx.textAlign   = 'center';
+        ctx.fillStyle   = '#1d1d1f';
+        ctx.fillText(lbl, p.x, p.y + r + 13 * d);
+        ctx.globalAlpha = 1;
+      });
+
+      // Tooltip
+      const hi = st.current.hover;
+      if (hi !== null) {
+        const doc  = documents[hi];
+        const p    = pr[hi];
+        const pd   = 10 * d, lh = 16 * d;
+        const tw   = 180 * d, th = 76 * d;
+        const nr   = (20 + doc.weight * 20) * p.s * d;
+        let tx = p.x + nr + 10 * d;
+        let ty = p.y - th / 2;
+        if (tx + tw > W - 8 * d) tx = p.x - nr - tw - 10 * d;
+        if (ty < 8 * d) ty = 8 * d;
+        if (ty + th > H - 8 * d) ty = H - th - 8 * d;
+
+        // Card background
+        ctx.fillStyle   = 'rgba(255,255,255,0.97)';
+        ctx.strokeStyle = '#e0e0e5';
+        ctx.lineWidth   = d;
+        const rr = 8 * d;
+        ctx.beginPath();
+        ctx.moveTo(tx + rr, ty);
+        ctx.arcTo(tx + tw, ty,      tx + tw, ty + th, rr);
+        ctx.arcTo(tx + tw, ty + th, tx,      ty + th, rr);
+        ctx.arcTo(tx,      ty + th, tx,      ty,      rr);
+        ctx.arcTo(tx,      ty,      tx + tw, ty,      rr);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        // Card text
+        ctx.textAlign   = 'left';
+        ctx.fillStyle   = '#1d1d1f';
+        ctx.font        = `bold ${11 * d}px -apple-system, sans-serif`;
+        const nameStr   = doc.name.length > 22 ? doc.name.slice(0, 21) + '…' : doc.name;
+        ctx.fillText(nameStr, tx + pd, ty + pd + lh * 0.8);
+        ctx.font        = `${10 * d}px -apple-system, sans-serif`;
+        ctx.fillStyle   = '#86868b';
+        ctx.fillText(`Weight: ${(doc.weight * 100).toFixed(0)}%  ·  Area: ${doc.area}`, tx + pd, ty + pd + lh * 1.9);
+        ctx.fillText(`Links: ${doc.links}  ·  Queries: ${doc.queries}`, tx + pd, ty + pd + lh * 2.9);
+      }
+
+      raf = requestAnimationFrame(draw);
+    };
+
+    // Mouse handlers
+    const onDown = e => {
+      st.current.drag    = { x: e.clientX, y: e.clientY };
+      st.current.dragged = false;
+    };
+    const onMove = e => {
+      const d  = dpr();
+      const rc = canvas.getBoundingClientRect();
+      const mx = (e.clientX - rc.left) * d;
+      const my = (e.clientY - rc.top)  * d;
+
+      if (st.current.drag) {
+        const dx = e.clientX - st.current.drag.x;
+        const dy = e.clientY - st.current.drag.y;
+        if (Math.abs(dx) > 2 || Math.abs(dy) > 2) st.current.dragged = true;
+        st.current.ry += dx * 0.006;
+        // Clamp X rotation to avoid flipping
+        st.current.rx = Math.max(-1.4, Math.min(1.4, st.current.rx + dy * 0.006));
+        st.current.drag = { x: e.clientX, y: e.clientY };
+      }
+
+      // Hit test
+      let found = null;
+      for (let i = documents.length - 1; i >= 0; i--) {
+        const p  = projRef.current[i];
+        if (!p) continue;
+        const r  = (20 + documents[i].weight * 20) * p.s * d;
+        const dx = mx - p.x, dy = my - p.y;
+        if (dx * dx + dy * dy <= r * r) { found = i; break; }
+      }
+      st.current.hover         = found;
+      canvas.style.cursor      = found !== null ? 'pointer' : (st.current.drag ? 'grabbing' : 'grab');
+    };
+    const onUp = () => {
+      if (!st.current.dragged && st.current.hover !== null)
+        toggleRef.current(documents[st.current.hover].id);
+      st.current.drag    = null;
+      st.current.dragged = false;
+    };
+    const onLeave = () => { st.current.drag = null; st.current.hover = null; };
+
+    const ro = new ResizeObserver(resize);
+    ro.observe(canvas.parentElement || canvas);
+    resize();
+    draw();
+
+    canvas.addEventListener('mousedown',  onDown);
+    canvas.addEventListener('mousemove',  onMove);
+    canvas.addEventListener('mouseup',    onUp);
+    canvas.addEventListener('mouseleave', onLeave);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      canvas.removeEventListener('mousedown',  onDown);
+      canvas.removeEventListener('mousemove',  onMove);
+      canvas.removeEventListener('mouseup',    onUp);
+      canvas.removeEventListener('mouseleave', onLeave);
+    };
+  }, []);
+
+  const n  = selected.length;
+  const ec = GRAPH_EDGES.length;
+
+  return (
+    <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', fontFamily:C.font }}>
+      <div style={{
+        padding:'10px 24px', borderBottom:C.border, flexShrink:0,
+        display:'flex', alignItems:'center', gap:'12px', background:C.bg,
+      }}>
+        <span style={{ fontSize:'13px', color:C.muted }}>{documents.length} nodes</span>
+        <span style={{ color:C.muted }}>·</span>
+        <span style={{ fontSize:'13px', color:C.muted }}>{ec} edge{ec !== 1 ? 's' : ''}</span>
+        {n >= 3 && (
+          <div style={{
+            display:'flex', alignItems:'center', gap:'5px',
+            background:C.accent+'12', border:'0.5px solid '+C.accent+'30',
+            borderRadius:'7px', padding:'3px 10px',
+            fontSize:'11px', fontWeight:600, color:C.accent,
+          }}>
+            <i className="ti ti-vector-triangle" style={{ fontSize:'12px' }} />
+            Graph ready
+          </div>
+        )}
+        <span style={{ marginLeft:'auto', fontSize:'11px', color:'#c7c7cc' }}>
+          Drag to rotate · click to select
+        </span>
+      </div>
+      <canvas
+        ref={canvasRef}
+        style={{ flex:1, width:'100%', display:'block', cursor:'grab', background:C.bg }}
+      />
     </div>
   );
 }
@@ -533,17 +792,17 @@ function PlaceholderPage({ title }) {
 // ── App ───────────────────────────────────────────────────────────────────────
 
 function App() {
-  const [selected,    setSelected]    = useState([]);
-  const [page,        setPage]        = useState('chat');
-  const [llm,         setLlm]         = useState('claude');
-  const [queryStats,  setQueryStats]  = useState({});
+  const [selected,   setSelected]   = useState([]);
+  const [page,       setPage]       = useState('chat');
+  const [llm,        setLlm]        = useState('claude');
+  const [queryStats, setQueryStats] = useState({});
 
   const toggle   = id => setSelected(prev =>
     prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
   );
   const clearAll = () => setSelected([]);
 
-  const trackQuery = (docIds) => {
+  const trackQuery = docIds => {
     const now = new Date().toISOString();
     setQueryStats(prev => {
       const next = { ...prev };
@@ -571,13 +830,15 @@ function App() {
           {page === 'documents' && (
             <DocumentsPage selected={selected} onToggle={toggle} />
           )}
+          {page === 'graphs' && (
+            <GraphsPage selected={selected} onToggle={toggle} />
+          )}
           {page === 'chat' && (
-            <QueryPage
+            <ChatPage
               selected={selected} onRemove={toggle}
               llm={llm} onTrackQuery={trackQuery}
             />
           )}
-          {page === 'graphs'   && <PlaceholderPage title="Graphs" />}
           {page === 'policies' && <PlaceholderPage title="Policies" />}
         </div>
       </div>
