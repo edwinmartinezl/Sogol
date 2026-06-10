@@ -51,10 +51,20 @@ Un edge entre Ventas Q1 2026 e Informe Financiero Anual (aparecen juntos en 2 me
 | Hover | Tooltip con nombre, weight%, area, links, queries |
 | Sin drag | Auto-rotación eje Y (+0.004 rad/frame) |
 
+#### Umbral de activación
+
+El grafo **requiere mínimo 3 documentos seleccionados** para renderizarse:
+
+| `selected.length` | Canvas | Mensaje |
+|-------------------|--------|---------|
+| 0 | vacío | "Selecciona al menos 3 documentos para construir el grafo" |
+| 1–2 | vacío | Mismo + "N de 3 seleccionados" |
+| ≥ 3 | grafo activo | — |
+
 #### Header de la página
 
 ```
-7 nodes · 1 edge                [Graph ready]    Drag to rotate · click to select
+N nodes · N edges               [Graph ready]    Drag to rotate · click to remove
                                  ↑ aparece cuando selected.length ≥ 3
 ```
 

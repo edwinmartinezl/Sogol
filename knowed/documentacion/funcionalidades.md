@@ -29,20 +29,27 @@
 
 ## Vista Graphs (`/graphs`)
 
+El grafo **solo se construye cuando hay 3 o más documentos seleccionados**.
+
+| Docs seleccionados | Estado de la vista |
+|--------------------|--------------------|
+| 0 | Ícono + "Selecciona al menos 3 documentos para construir el grafo" |
+| 1–2 | Mismo mensaje + contador "N de 3 seleccionados" |
+| ≥ 3 | Grafo 3D activo |
+
 - Grafo 3D interactivo en canvas HTML5 puro
-- **Nodos**: círculos con radio proporcional al `weight` (mapeo 20–40px base)
+- **Nodos**: solo los documentos seleccionados; círculos con radio proporcional al `weight` (mapeo 20–40px base)
   - Color por tipo: xlsx `#34a853`, pdf `#ea4335`, csv `#4285f4`
   - Opacidad aumenta con profundidad (efecto 3D)
-  - Anillo azul `#0071e3` en nodos seleccionados
-  - Anillo gris oscuro en hover
+  - Anillo azul `#0071e3` en hover
   - Label truncado a 14 chars bajo cada nodo
-- **Aristas**: líneas entre docs co-ocurrentes en `sources` de mensajes AI
+- **Aristas**: líneas entre docs co-ocurrentes en `sources` de mensajes AI, filtradas a la selección activa
   - Grosor proporcional al número de co-ocurrencias
 - **Rotación**: drag horizontal → eje Y, drag vertical → eje X (clamped ±1.4 rad)
 - **Auto-rotación**: eje Y a 0.004 rad/frame cuando no hay drag
-- **Click**: sin drag → toggle selección del nodo apuntado
+- **Click**: sin drag → deselecciona el nodo (lo quita del contexto)
 - **Tooltip**: nombre completo, weight%, area, links, queries
-- **Header**: contador de nodos y aristas; badge `Graph ready` cuando ≥3 seleccionados
+- **Header**: `N nodes · N edges` + badge `Graph ready` cuando ≥3 seleccionados
 
 ## Vista Chat (`/chat`) — home
 

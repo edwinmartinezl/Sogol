@@ -579,7 +579,7 @@ function GraphsPage({ selected, onToggle }) {
       const sel     = selRef.current;
       const selDocs = documents.filter(doc => sel.includes(doc.id));
 
-      if (selDocs.length === 0) {
+      if (selDocs.length < 3) {
         renderRef.current = { pr: [], selDocs: [] };
         raf = requestAnimationFrame(draw);
         return;
@@ -770,7 +770,7 @@ function GraphsPage({ selected, onToggle }) {
             Graph ready
           </div>
         )}
-        {n > 0 && (
+        {n >= 3 && (
           <span style={{ marginLeft:'auto', fontSize:'11px', color:'#c7c7cc' }}>
             Drag to rotate · click to remove
           </span>
@@ -778,7 +778,7 @@ function GraphsPage({ selected, onToggle }) {
       </div>
 
       <div style={{ flex:1, position:'relative', overflow:'hidden' }}>
-        {n === 0 && (
+        {n < 3 && (
           <div style={{
             position:'absolute', inset:0, pointerEvents:'none',
             display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
@@ -786,13 +786,18 @@ function GraphsPage({ selected, onToggle }) {
           }}>
             <i className="ti ti-circles-relation" style={{ fontSize:'42px', color:'#e0e0e5' }} />
             <span style={{ fontSize:'13px', color:C.muted }}>
-              Selecciona documentos desde el sidebar para construir el grafo
+              Selecciona al menos 3 documentos para construir el grafo
             </span>
+            {n > 0 && (
+              <span style={{ fontSize:'11px', color:'#c7c7cc' }}>
+                {n} de 3 seleccionado{n !== 1 ? 's' : ''}
+              </span>
+            )}
           </div>
         )}
         <canvas
           ref={canvasRef}
-          style={{ width:'100%', height:'100%', display:'block', cursor: n > 0 ? 'grab' : 'default' }}
+          style={{ width:'100%', height:'100%', display:'block', cursor: n >= 3 ? 'grab' : 'default' }}
         />
       </div>
     </div>
