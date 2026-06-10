@@ -90,4 +90,8 @@ export const CHAT_HISTORY = [
   { role:'ai',   text:'Sí, encontré una correlación importante. En febrero los costos de IT subieron 38%, coincidiendo con una caída del 22% en ventas ese mismo mes.', insight:'El pico de gasto en IT precede en 5 días la caída de ventas — posible downtime durante cierre de órdenes.', sources:['doc-001','doc-002'] },
   { role:'user', text:'¿Qué mes tuvo mejor ratio ventas vs costo IT?' },
   { role:'ai',   text:'Enero fue el más eficiente — $8.40 en ventas por cada $1 de IT. Marzo mejoró vs febrero pero no recuperó enero.', sources:['doc-001','doc-002'] },
+  { role:'user', text:'¿Cómo se compara la base de clientes 2025 con las ventas del Q1?' },
+  { role:'ai',   text:'La base de clientes creció un 12% respecto al año anterior, lo que correlaciona con el pico de ventas de enero. Los segmentos con mayor retención generaron el 68% del ingreso Q1.', sources:['doc-001','doc-003'] },
+  { role:'user', text:'¿El informe financiero menciona el crecimiento de clientes?' },
+  { role:'ai',   text:'Sí, la sección de ingresos cita un aumento del 15% en clientes activos como principal driver del resultado anual.', sources:['doc-002','doc-003'] },
 ];
