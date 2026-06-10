@@ -136,11 +136,27 @@ function MessageBubble({ msg }) {
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 
 const NAV = [
-  { icon:'ti-files',        label:'Documents', key:'documents' },
-  { icon:'ti-chart-bar',    label:'Graphs',    key:'graphs'    },
-  { icon:'ti-messages',     label:'Chat',      key:'chat'      },
-  { icon:'ti-shield-check', label:'Policies',  key:'policies'  },
+  { icon:'ti-files',        label:'Documents',  key:'documents'  },
+  { icon:'ti-eye',          label:'Visualizar', key:'visualize'  },
+  { icon:'ti-chart-bar',    label:'Graphs',     key:'graphs'     },
+  { icon:'ti-messages',     label:'Chat',       key:'chat'       },
+  { icon:'ti-shield-check', label:'Policies',   key:'policies'   },
 ];
+
+// Column names for spreadsheet previews
+const DOC_COLS = {
+  'doc-001': ['Mes',      'Ventas ($)',  'Target ($)', '∆%'],
+  'doc-003': ['ID',       'Segmento',   'Región',     'LTV ($)'],
+  'doc-004': ['SKU',      'Producto',   'Stock',      'Ubicación'],
+  'doc-006': ['Ticket #', 'Categoría',  'Tiempo (h)', 'Estado'],
+};
+
+// Section titles for PDF previews
+const DOC_SECTIONS = {
+  'doc-002': ['Resumen Ejecutivo',   'Análisis de Ingresos',  'Estructura de Gastos',  'Balance y Proyección'],
+  'doc-005': ['Alcance de Auditoría','Hallazgos Principales', 'Análisis de Riesgos',   'Recomendaciones'],
+  'doc-007': ['Visión Estratégica',  'Objetivos 2026',        'Iniciativas Clave',     'Métricas de Éxito'],
+};
 
 function DocItem({ doc, selected, onToggle }) {
   const isSel = selected.includes(doc.id);
@@ -859,6 +875,244 @@ function GraphsPage({ selected, onToggle }) {
   );
 }
 
+// ── Visualize page ────────────────────────────────────────────────────────────
+
+function SpreadsheetView({ doc }) {
+  const cols = DOC_COLS[doc.id] || ['Col A', 'Col B', 'Col C', 'Col D'];
+  const widths = [78, 62, 88, 54, 72, 84, 58, 68, 76, 50];
+  return (
+    <div style={{ overflowX:'auto' }}>
+      <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'12px' }}>
+        <thead>
+          <tr style={{ background:C.surface }}>
+            <th style={{ padding:'8px 14px', color:C.muted, fontWeight:600, borderBottom:C.border, textAlign:'left', fontSize:'11px', width:'36px' }}>#</th>
+            {cols.map(col => (
+              <th key={col} style={{ padding:'8px 14px', color:C.muted, fontWeight:600, borderBottom:C.border, textAlign:'left', fontSize:'11px', whiteSpace:'nowrap' }}>{col}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {Array.from({ length:9 }, (_, row) => (
+            <tr key={row} style={{ borderBottom: row < 8 ? C.border : 'none', background: row%2===0 ? C.bg : C.surface+'80' }}>
+              <td style={{ padding:'8px 14px', color:C.muted, fontSize:'11px' }}>{row+1}</td>
+              {cols.map((col, j) => (
+                <td key={col} style={{ padding:'9px 14px' }}>
+                  <div style={{ height:'9px', borderRadius:'3px', background:'#e5e5ea', width:`${widths[(row*cols.length+j) % widths.length]}%` }} />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PdfView({ doc }) {
+  const sections = DOC_SECTIONS[doc.id] || ['Introducción', 'Desarrollo', 'Conclusiones', 'Anexos'];
+  const lineGroups = [[88,82,90,76,85,45],[90,84,88,92,38],[86,90,78,88,91,68],[84,90,85,44]];
+  return (
+    <div style={{ padding:'28px 32px', maxWidth:'560px', margin:'0 auto' }}>
+      {/* Document title block */}
+      <div style={{ marginBottom:'28px', paddingBottom:'20px', borderBottom:C.border }}>
+        <div style={{ height:'16px', background:'#1d1d1f', borderRadius:'4px', width:'72%', marginBottom:'10px' }} />
+        <div style={{ height:'10px', background:'#c7c7cc', borderRadius:'3px', width:'42%', marginBottom:'6px' }} />
+        <div style={{ height:'10px', background:'#e5e5ea', borderRadius:'3px', width:'28%' }} />
+      </div>
+      {/* Sections */}
+      {sections.map((title, si) => (
+        <div key={si} style={{ marginBottom:'28px' }}>
+          <div style={{ fontSize:'11px', fontWeight:700, color:C.muted, textTransform:'uppercase', letterSpacing:'0.6px', marginBottom:'10px' }}>
+            {title}
+          </div>
+          {lineGroups[si % lineGroups.length].map((w, li) => (
+            <div key={li} style={{ height:'9px', background:'#e5e5ea', borderRadius:'3px', width:`${w}%`, marginBottom:'7px' }} />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DocPreview({ doc, isSelected, onToggle }) {
+  const isSpreadsheet = doc.type === 'xlsx' || doc.type === 'csv';
+  return (
+    <div style={{
+      background:C.bg, borderRadius:'12px', border:C.border,
+      boxShadow:'0 2px 24px rgba(0,0,0,0.07)', width:'100%', maxWidth:'700px',
+      overflow:'hidden',
+    }}>
+      {/* Header */}
+      <div style={{ padding:'22px 28px', borderBottom:C.border }}>
+        <div style={{ display:'flex', alignItems:'flex-start', gap:'12px' }}>
+          <div style={{
+            width:'40px', height:'40px', borderRadius:'10px', flexShrink:0,
+            background:TYPE_COLOR[doc.type]+'18',
+            display:'flex', alignItems:'center', justifyContent:'center',
+          }}>
+            <i className={'ti '+(TYPE_ICON[doc.type]||'ti-file')} style={{ fontSize:'20px', color:TYPE_COLOR[doc.type] }} />
+          </div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'5px', flexWrap:'wrap' }}>
+              <span style={{ fontSize:'16px', fontWeight:600, color:C.text }}>{doc.name}</span>
+              <TypeBadge type={doc.type} />
+            </div>
+            <div style={{ display:'flex', gap:'12px', fontSize:'12px', color:C.muted, flexWrap:'wrap' }}>
+              <span>{doc.area}</span>
+              <span>·</span>
+              <span>{doc.date}</span>
+              <span>·</span>
+              <span>{fmtSize(doc.size)}</span>
+            </div>
+          </div>
+          <button
+            onClick={() => onToggle(doc.id)}
+            style={{
+              flexShrink:0, padding:'6px 14px', fontSize:'11px', fontWeight:500,
+              color:        isSelected ? '#c0392b'      : C.accent,
+              background:   isSelected ? '#fdf2f2'      : C.accent+'12',
+              border:       isSelected ? '0.5px solid #f5c6cb' : '0.5px solid '+C.accent+'35',
+              borderRadius:'8px', cursor:'pointer', fontFamily:C.font,
+              display:'flex', alignItems:'center', gap:'5px', whiteSpace:'nowrap',
+            }}
+          >
+            <i className={'ti '+(isSelected?'ti-minus':'ti-plus')} style={{ fontSize:'12px' }} />
+            {isSelected ? 'Remove context' : 'Add to context'}
+          </button>
+        </div>
+
+        {/* Weight bar */}
+        <div style={{ marginTop:'16px' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'5px' }}>
+            <span style={{ fontSize:'10px', fontWeight:600, color:C.muted, textTransform:'uppercase', letterSpacing:'0.5px' }}>Weight</span>
+            <span style={{ fontSize:'11px', fontWeight:600, color:C.text }}>{(doc.weight*100).toFixed(0)}%</span>
+          </div>
+          <div style={{ height:'4px', background:C.surface, borderRadius:'2px', overflow:'hidden' }}>
+            <div style={{ width:`${doc.weight*100}%`, height:'100%', background:C.accent, borderRadius:'2px' }} />
+          </div>
+        </div>
+
+        {/* Stats chips */}
+        <div style={{ display:'flex', gap:'8px', marginTop:'14px', flexWrap:'wrap' }}>
+          {[
+            { label:'Links',   value:doc.links   },
+            { label:'Graphs',  value:doc.graphs  },
+            { label:'Queries', value:doc.queries },
+          ].map(s => (
+            <div key={s.label} style={{
+              padding:'3px 10px', borderRadius:'20px', fontSize:'11px',
+              background:C.surface, border:C.border, color:C.muted,
+            }}>
+              <span style={{ color:C.text, fontWeight:600 }}>{s.value}</span> {s.label}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Content preview */}
+      {isSpreadsheet ? <SpreadsheetView doc={doc} /> : <PdfView doc={doc} />}
+    </div>
+  );
+}
+
+function VisualizePage({ selected, onToggle }) {
+  const [search,  setSearch]  = useState('');
+  const [viewId,  setViewId]  = useState(null);
+
+  const filtered = documents.filter(d => d.name.toLowerCase().includes(search.toLowerCase()));
+  const viewDoc  = documents.find(d => d.id === viewId) || null;
+
+  return (
+    <div style={{ flex:1, display:'flex', overflow:'hidden', fontFamily:C.font }}>
+
+      {/* ── Left panel: doc list ── */}
+      <div style={{
+        width:'268px', minWidth:'268px', borderRight:C.border,
+        display:'flex', flexDirection:'column', overflow:'hidden', background:C.bg,
+      }}>
+        {/* Search */}
+        <div style={{ padding:'12px', borderBottom:C.border, flexShrink:0 }}>
+          <div style={{ position:'relative' }}>
+            <i className="ti ti-search" style={{
+              position:'absolute', left:'9px', top:'50%', transform:'translateY(-50%)',
+              fontSize:'13px', color:C.muted, pointerEvents:'none',
+            }} />
+            <input
+              type="text" placeholder="Search documents…" value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{
+                width:'100%', boxSizing:'border-box',
+                padding:'7px 8px 7px 30px', fontSize:'12px',
+                border:C.border, borderRadius:'8px', background:C.surface,
+                color:C.text, outline:'none', fontFamily:C.font,
+              }}
+            />
+          </div>
+        </div>
+
+        {/* Doc list */}
+        <div style={{ flex:1, overflow:'auto', padding:'6px' }}>
+          {filtered.length === 0 && (
+            <div style={{ padding:'20px', textAlign:'center', fontSize:'12px', color:C.muted }}>No results</div>
+          )}
+          {filtered.map(doc => {
+            const isActive = viewId === doc.id;
+            return (
+              <div key={doc.id} onClick={() => setViewId(doc.id)} style={{
+                padding:'10px 12px', borderRadius:'8px', cursor:'pointer', marginBottom:'2px',
+                background: isActive ? C.accent+'12' : 'transparent',
+                border:     isActive ? '0.5px solid '+C.accent+'35' : '0.5px solid transparent',
+              }}>
+                <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                  <i className={'ti '+(TYPE_ICON[doc.type]||'ti-file')}
+                     style={{ fontSize:'15px', color:TYPE_COLOR[doc.type], flexShrink:0 }} />
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:'12px', fontWeight:500, color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                      {doc.name}
+                    </div>
+                    <div style={{ fontSize:'10px', color:C.muted, marginTop:'2px' }}>
+                      {doc.area} · {fmtSize(doc.size)}
+                    </div>
+                  </div>
+                  <TypeBadge type={doc.type} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Footer count */}
+        <div style={{ padding:'10px 14px', borderTop:C.border, flexShrink:0, fontSize:'11px', color:C.muted }}>
+          {filtered.length} document{filtered.length !== 1 ? 's' : ''}
+        </div>
+      </div>
+
+      {/* ── Right panel: viewer ── */}
+      <div style={{
+        flex:1, overflow:'auto', background:C.surface,
+        display:'flex', alignItems:'flex-start', justifyContent:'center',
+        padding:'32px 28px',
+      }}>
+        {!viewDoc ? (
+          <div style={{
+            display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+            height:'100%', gap:'12px', pointerEvents:'none',
+          }}>
+            <i className="ti ti-eye" style={{ fontSize:'44px', color:'#e0e0e5' }} />
+            <span style={{ fontSize:'13px', color:C.muted }}>Selecciona un documento para visualizarlo</span>
+          </div>
+        ) : (
+          <DocPreview
+            doc={viewDoc}
+            isSelected={selected.includes(viewDoc.id)}
+            onToggle={onToggle}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Placeholder ───────────────────────────────────────────────────────────────
 
 function PlaceholderPage({ title }) {
@@ -912,6 +1166,9 @@ function App() {
         <div style={{ flex:1, display:'flex', overflow:'hidden' }}>
           {page === 'documents' && (
             <DocumentsPage selected={selected} onToggle={toggle} />
+          )}
+          {page === 'visualize' && (
+            <VisualizePage selected={selected} onToggle={toggle} />
           )}
           {page === 'graphs' && (
             <GraphsPage selected={selected} onToggle={toggle} />

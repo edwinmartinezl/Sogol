@@ -75,6 +75,49 @@ Se abre al hacer click en cualquier nodo del grafo.
 - Tracking de `queryStats` por documento en cada envío
 - Footer con conteo de contexto y disclaimer de seguridad
 
+## Vista Visualizar (`/visualize`)
+
+Layout dos paneles:
+
+```
+[Panel izquierdo 268px] │ [Panel derecho flex:1]
+  Search input           │   DocPreview centrado
+  Lista de documentos    │   (fondo C.surface)
+  Footer con conteo      │
+```
+
+### Panel izquierdo
+
+- Search en tiempo real por nombre
+- Cada ítem: icono tipo + nombre + area · size + TypeBadge
+- Ítem activo resaltado en azul
+- Footer con conteo de documentos filtrados
+
+### DocPreview (panel derecho)
+
+Renderiza un card centrado (`max-width: 700px`) con:
+
+| Sección | Contenido |
+|---------|-----------|
+| Header | Icono tipo, nombre, TypeBadge |
+| Meta | Area, Date, Size |
+| Botón | Add to context / Remove context (toggle selección) |
+| Weight bar | Progress bar `0–100%` |
+| Stats chips | Links, Graphs, Queries |
+| Content | SpreadsheetView (xlsx/csv) o PdfView (pdf) |
+
+### SpreadsheetView
+
+Tabla HTML con cabecera de columnas específicas por documento (`DOC_COLS`) y 9 filas de celdas placeholder (bloques grises de ancho variable).
+
+### PdfView
+
+Secciones con título textual (`DOC_SECTIONS`) y filas de bloques grises simulando párrafos.
+
+### Estado vacío
+
+Si no hay documento seleccionado: icono `ti-eye` + "Selecciona un documento para visualizarlo".
+
 ## Vista Policies (`/policies`)
 
 - Placeholder — pendiente
