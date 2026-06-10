@@ -47,9 +47,21 @@ El grafo **solo se construye cuando hay 3 o más documentos seleccionados**.
   - Grosor proporcional al número de co-ocurrencias
 - **Rotación**: drag horizontal → eje Y, drag vertical → eje X (clamped ±1.4 rad)
 - **Auto-rotación**: eje Y a 0.004 rad/frame cuando no hay drag
-- **Click**: sin drag → deselecciona el nodo (lo quita del contexto)
-- **Tooltip**: nombre completo, weight%, area, links, queries
+- **Click en nodo**: abre modal de detalle del documento
+- **Hover**: tooltip ligero con nombre + "Click para ver detalles"
 - **Header**: `N nodes · N edges` + badge `Graph ready` cuando ≥3 seleccionados
+
+### Modal de detalle (`DocModal`)
+
+Se abre al hacer click en cualquier nodo del grafo.
+
+| Elemento | Descripción |
+|----------|-------------|
+| TypeBadge + nombre | Header del modal |
+| Barra de Weight | Progress bar `0–100%` con color accent |
+| Grid 2×3 | Area, Date, Size, Links, Graphs, Queries |
+| "Remove from context" | Deselecciona el doc y cierra el modal |
+| "Close" / Escape / click backdrop | Cierra sin deseleccionar |
 
 ## Vista Chat (`/chat`) — home
 

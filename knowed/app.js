@@ -518,15 +518,137 @@ function ChatPage({ selected, onRemove, llm, onTrackQuery }) {
   );
 }
 
+// ── Doc modal ─────────────────────────────────────────────────────────────────
+
+function DocModal({ doc, onClose, onRemove }) {
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const rows = [
+    { label:'Area',    value: doc.area },
+    { label:'Date',    value: doc.date },
+    { label:'Size',    value: fmtSize(doc.size) },
+    { label:'Links',   value: doc.links },
+    { label:'Graphs',  value: doc.graphs },
+    { label:'Queries', value: doc.queries },
+  ];
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position:'fixed', inset:0, zIndex:1000,
+        background:'rgba(0,0,0,0.18)',
+        display:'flex', alignItems:'center', justifyContent:'center',
+        fontFamily:C.font,
+      }}
+    >
+      <div onClick={e => e.stopPropagation()} style={{
+        background:C.bg, borderRadius:'16px', padding:'24px',
+        width:'380px', maxWidth:'calc(100vw - 32px)',
+        boxShadow:'0 20px 60px rgba(0,0,0,0.14)', border:C.border,
+      }}>
+
+        {/* Header */}
+        <div style={{ display:'flex', alignItems:'flex-start', gap:'12px', marginBottom:'20px' }}>
+          <div style={{ flex:1 }}>
+            <TypeBadge type={doc.type} />
+            <div style={{ fontSize:'16px', fontWeight:600, color:C.text, marginTop:'8px', lineHeight:'1.3' }}>
+              {doc.name}
+            </div>
+          </div>
+          <button onClick={onClose} style={{
+            flexShrink:0, width:'28px', height:'28px',
+            display:'flex', alignItems:'center', justifyContent:'center',
+            border:C.border, borderRadius:'8px', background:C.surface,
+            cursor:'pointer', color:C.muted,
+          }}>
+            <i className="ti ti-x" style={{ fontSize:'13px' }} />
+          </button>
+        </div>
+
+        {/* Weight bar */}
+        <div style={{ marginBottom:'16px' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'5px' }}>
+            <span style={{ fontSize:'10px', fontWeight:600, color:C.muted, textTransform:'uppercase', letterSpacing:'0.5px' }}>
+              Weight
+            </span>
+            <span style={{ fontSize:'12px', fontWeight:600, color:C.text }}>
+              {(doc.weight * 100).toFixed(0)}%
+            </span>
+          </div>
+          <div style={{ height:'5px', background:C.surface, borderRadius:'3px', overflow:'hidden' }}>
+            <div style={{ width:`${doc.weight * 100}%`, height:'100%', background:C.accent, borderRadius:'3px' }} />
+          </div>
+        </div>
+
+        {/* Fields grid */}
+        <div style={{
+          display:'grid', gridTemplateColumns:'1fr 1fr',
+          border:C.border, borderRadius:'10px', overflow:'hidden',
+          marginBottom:'20px',
+        }}>
+          {rows.map((row, i) => (
+            <div key={row.label} style={{
+              padding:'10px 14px',
+              borderBottom: i < rows.length - 2 ? C.border : 'none',
+              borderRight:  i % 2 === 0 ? C.border : 'none',
+            }}>
+              <div style={{ fontSize:'10px', fontWeight:600, color:C.muted, textTransform:'uppercase', letterSpacing:'0.5px', marginBottom:'3px' }}>
+                {row.label}
+              </div>
+              <div style={{ fontSize:'13px', color:C.text }}>{row.value}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Actions */}
+        <div style={{ display:'flex', gap:'8px' }}>
+          <button
+            onClick={() => { onRemove(doc.id); onClose(); }}
+            style={{
+              flex:1, padding:'9px', fontSize:'12px', fontWeight:500,
+              color:'#c0392b', background:'#fdf2f2', border:'0.5px solid #f5c6cb',
+              borderRadius:'9px', cursor:'pointer', fontFamily:C.font,
+              display:'flex', alignItems:'center', justifyContent:'center', gap:'5px',
+            }}
+          >
+            <i className="ti ti-trash" style={{ fontSize:'13px' }} />
+            Remove from context
+          </button>
+          <button
+            onClick={onClose}
+            style={{
+              padding:'9px 18px', fontSize:'12px', fontWeight:500,
+              color:C.text, background:C.surface, border:C.border,
+              borderRadius:'9px', cursor:'pointer', fontFamily:C.font,
+            }}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Graphs page (D3 force layout 2D) ─────────────────────────────────────────
 
 function GraphsPage({ selected, onToggle }) {
   const svgRef    = useRef(null);
   const simRef    = useRef(null);
   const toggleRef = useRef(onToggle);
-  const [tip, setTip] = useState(null);
+  const clickRef  = useRef(null);
+  const [tip,      setTip]      = useState(null);
+  const [modalDoc, setModalDoc] = useState(null);
 
   useEffect(() => { toggleRef.current = onToggle; }, [onToggle]);
+
+  // Updated every render — opens modal with clean doc data
+  clickRef.current = d => setModalDoc(documents.find(doc => doc.id === d.id) || d);
 
   useEffect(() => {
     const svgEl = svgRef.current;
@@ -600,7 +722,7 @@ function GraphsPage({ selected, onToggle }) {
         setTip(null);
         d3.select(event.currentTarget).attr('stroke', '#ffffff').attr('stroke-width', 2.5);
       })
-      .on('click', (event, d) => { event.stopPropagation(); toggleRef.current(d.id); })
+      .on('click', (event, d) => { event.stopPropagation(); clickRef.current(d); })
       .call(
         d3.drag()
           .on('start', (event, d) => {
@@ -682,7 +804,7 @@ function GraphsPage({ selected, onToggle }) {
         )}
         {n >= 3 && (
           <span style={{ marginLeft:'auto', fontSize:'11px', color:'#c7c7cc' }}>
-            Drag nodes · scroll to zoom · click to remove
+            Drag nodes · scroll to zoom · click for details
           </span>
         )}
       </div>
@@ -712,21 +834,27 @@ function GraphsPage({ selected, onToggle }) {
           <div style={{
             position:'absolute', left:tip.x, top:tip.y, zIndex:10,
             background:C.bg, border:C.border, borderRadius:'10px',
-            padding:'10px 14px', minWidth:'160px',
+            padding:'10px 14px', minWidth:'150px',
             boxShadow:'0 4px 20px rgba(0,0,0,0.09)',
             pointerEvents:'none',
           }}>
-            <div style={{ fontSize:'12px', fontWeight:600, color:C.text, marginBottom:'4px' }}>
+            <div style={{ fontSize:'12px', fontWeight:600, color:C.text, marginBottom:'3px' }}>
               {tip.doc.name}
             </div>
-            <div style={{ fontSize:'11px', color:C.muted, lineHeight:'1.7' }}>
-              {tip.doc.area}<br/>
-              Weight: {(tip.doc.weight * 100).toFixed(0)}%<br/>
-              Links: {tip.doc.links} · Queries: {tip.doc.queries}
+            <div style={{ fontSize:'11px', color:C.muted }}>
+              Click para ver detalles
             </div>
           </div>
         )}
       </div>
+
+      {modalDoc && (
+        <DocModal
+          doc={modalDoc}
+          onClose={() => setModalDoc(null)}
+          onRemove={onToggle}
+        />
+      )}
     </div>
   );
 }
