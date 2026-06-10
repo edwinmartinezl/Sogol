@@ -48,35 +48,9 @@ const TYPE_COLOR  = { xlsx:'#1a7a4a', pdf:'#c0392b', csv:'#2563eb' };
 const TYPE_ICON   = { xlsx:'ti-table', pdf:'ti-file-text', csv:'ti-file-spreadsheet' };
 const GRAPH_COLOR = { xlsx:'#34a853', pdf:'#ea4335', csv:'#4285f4' };
 
-// ── 3D graph math ─────────────────────────────────────────────────────────────
+// ── Graph edge computation ────────────────────────────────────────────────────
 
-const _rotY = (p, a) => ({
-  x:  p.x * Math.cos(a) + p.z * Math.sin(a),
-  y:  p.y,
-  z: -p.x * Math.sin(a) + p.z * Math.cos(a),
-});
-const _rotX = (p, a) => ({
-  x:  p.x,
-  y:  p.y * Math.cos(a) - p.z * Math.sin(a),
-  z:  p.y * Math.sin(a) + p.z * Math.cos(a),
-});
-const _proj = (p, cx, cy, fl = 480) => {
-  const s = fl / (fl + p.z + 220);
-  return { x: cx + p.x * s, y: cy + p.y * s, s };
-};
-
-const _fibSphere = (n, r) => {
-  const pts = [], phi = Math.PI * (1 + Math.sqrt(5));
-  for (let i = 0; i < n; i++) {
-    const y  = 1 - (i / Math.max(n - 1, 1)) * 2;
-    const rr = Math.sqrt(Math.max(0, 1 - y * y));
-    const t  = phi * i;
-    pts.push({ x: Math.cos(t) * rr * r, y: y * r, z: Math.sin(t) * rr * r });
-  }
-  return pts;
-};
-
-const _computeEdges = () => {
+const GRAPH_EDGES = (() => {
   const co = {};
   CHAT_HISTORY.forEach(msg => {
     if (!msg.sources || msg.sources.length < 2) return;
@@ -90,10 +64,7 @@ const _computeEdges = () => {
     const [a, b] = k.split('|');
     return { from: a, to: b, weight: w };
   });
-};
-
-const GRAPH_EDGES   = _computeEdges();
-const GRAPH_BASE_3D = _fibSphere(documents.length, 160);
+})();
 
 // ── Type badge ────────────────────────────────────────────────────────────────
 
@@ -543,208 +514,88 @@ function ChatPage({ selected, onRemove, llm, onTrackQuery }) {
   );
 }
 
-// ── Graphs page (3D canvas) ───────────────────────────────────────────────────
+// ── Graphs page (3d-force-graph) ─────────────────────────────────────────────
 
 function GraphsPage({ selected, onToggle }) {
-  const canvasRef  = useRef(null);
-  const selRef     = useRef(selected);
-  const toggleRef  = useRef(onToggle);
-  // shared between draw loop and mouse handlers
-  const renderRef  = useRef({ pr: [], selDocs: [] });
-  const st         = useRef({ ry: 0.5, rx: 0.2, drag: null, hover: null, dragged: false });
+  const containerRef = useRef(null);
+  const graphRef     = useRef(null);
+  const toggleRef    = useRef(onToggle);
 
-  useEffect(() => { selRef.current    = selected; }, [selected]);
   useEffect(() => { toggleRef.current = onToggle; }, [onToggle]);
 
+  // Init ForceGraph3D once on mount
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    let raf;
+    const el = containerRef.current;
+    if (!el || typeof ForceGraph3D === 'undefined') return;
 
-    const dpr    = () => window.devicePixelRatio || 1;
-    const resize = () => {
-      const d = dpr(), r = canvas.getBoundingClientRect();
-      canvas.width  = r.width  * d;
-      canvas.height = r.height * d;
-    };
+    const g = ForceGraph3D()(el)
+      .backgroundColor('#0d1117')
+      .showNavInfo(false)
+      .nodeId('id')
+      .nodeVal(node => Math.max(2, node.weight * 18))
+      .nodeColor(node => GRAPH_COLOR[node.type] || '#888888')
+      .nodeOpacity(0.92)
+      .nodeLabel(node =>
+        `<div style="background:rgba(0,0,0,0.75);color:#fff;padding:6px 10px;border-radius:8px;font-size:12px;line-height:1.5;font-family:-apple-system,sans-serif;">
+          <strong>${node.name}</strong><br/>
+          ${node.area} · ${(node.weight * 100).toFixed(0)}% weight<br/>
+          <span style="color:#aaa">${node.links} links · ${node.queries} queries</span>
+        </div>`
+      )
+      .linkColor(() => 'rgba(120,140,200,0.4)')
+      .linkWidth(link => (link.weight || 1) * 1.5)
+      .linkDirectionalParticles(link => (link.weight || 1) * 3)
+      .linkDirectionalParticleWidth(link => (link.weight || 1) * 2)
+      .linkDirectionalParticleColor(() => '#a0aaff')
+      .linkDirectionalParticleSpeed(0.005)
+      .onNodeClick(node => toggleRef.current(node.id));
 
-    const draw = () => {
-      const d   = dpr();
-      const ctx = canvas.getContext('2d');
-      const W   = canvas.width, H = canvas.height;
-      const cx  = W / 2, cy = H / 2;
-      ctx.clearRect(0, 0, W, H);
+    graphRef.current = g;
 
-      // Only render selected documents
-      const sel     = selRef.current;
-      const selDocs = documents.filter(doc => sel.includes(doc.id));
-
-      if (selDocs.length < 3) {
-        renderRef.current = { pr: [], selDocs: [] };
-        raf = requestAnimationFrame(draw);
-        return;
+    const ro = new ResizeObserver(() => {
+      if (graphRef.current) {
+        graphRef.current.width(el.offsetWidth).height(el.offsetHeight);
       }
-
-      if (!st.current.drag) st.current.ry += 0.004;
-
-      // 3D positions computed for the current selection size
-      const base3d   = _fibSphere(selDocs.length, 160);
-      const selEdges = GRAPH_EDGES.filter(e => sel.includes(e.from) && sel.includes(e.to));
-
-      const t  = base3d.map(p => _rotX(_rotY(p, st.current.ry), st.current.rx));
-      const pr = t.map(p => _proj(p, cx, cy));
-      renderRef.current = { pr, selDocs };
-
-      const ord = selDocs.map((_, i) => i).sort((a, b) => t[a].z - t[b].z);
-
-      // Edges
-      selEdges.forEach(e => {
-        const ai = selDocs.findIndex(d => d.id === e.from);
-        const bi = selDocs.findIndex(d => d.id === e.to);
-        if (ai < 0 || bi < 0) return;
-        ctx.beginPath();
-        ctx.moveTo(pr[ai].x, pr[ai].y);
-        ctx.lineTo(pr[bi].x, pr[bi].y);
-        ctx.strokeStyle = '#d1d1d6';
-        ctx.lineWidth   = (e.weight + 0.5) * d;
-        ctx.stroke();
-      });
-
-      // Nodes (all visible nodes are selected by definition)
-      ord.forEach(i => {
-        const doc   = selDocs[i];
-        const p     = pr[i];
-        const depth = Math.min(1, Math.max(0, (t[i].z + 200) / 400));
-        const r     = (20 + doc.weight * 20) * p.s * d;
-        const isHov = st.current.hover === i;
-
-        ctx.globalAlpha = 0.5 + depth * 0.5;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-        ctx.fillStyle = GRAPH_COLOR[doc.type] || '#888888';
-        ctx.fill();
-
-        if (isHov) {
-          ctx.globalAlpha = 1;
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, r + 3 * d, 0, Math.PI * 2);
-          ctx.strokeStyle = '#0071e3';
-          ctx.lineWidth   = 2 * d;
-          ctx.stroke();
-        }
-
-        const lbl = doc.name.length > 14 ? doc.name.slice(0, 13) + '…' : doc.name;
-        const fs  = Math.max(9 * d, Math.round(11 * p.s * d));
-        ctx.globalAlpha = 0.45 + depth * 0.55;
-        ctx.font        = `${fs}px -apple-system, BlinkMacSystemFont, sans-serif`;
-        ctx.textAlign   = 'center';
-        ctx.fillStyle   = '#1d1d1f';
-        ctx.fillText(lbl, p.x, p.y + r + 13 * d);
-        ctx.globalAlpha = 1;
-      });
-
-      // Tooltip
-      const hi = st.current.hover;
-      if (hi !== null && hi < selDocs.length) {
-        const doc  = selDocs[hi];
-        const p    = pr[hi];
-        const pd   = 10 * d, lh = 16 * d;
-        const tw   = 180 * d, th = 76 * d;
-        const nr   = (20 + doc.weight * 20) * p.s * d;
-        let tx = p.x + nr + 10 * d;
-        let ty = p.y - th / 2;
-        if (tx + tw > W - 8 * d) tx = p.x - nr - tw - 10 * d;
-        if (ty < 8 * d) ty = 8 * d;
-        if (ty + th > H - 8 * d) ty = H - th - 8 * d;
-
-        ctx.fillStyle   = 'rgba(255,255,255,0.97)';
-        ctx.strokeStyle = '#e0e0e5';
-        ctx.lineWidth   = d;
-        const rr = 8 * d;
-        ctx.beginPath();
-        ctx.moveTo(tx + rr, ty);
-        ctx.arcTo(tx + tw, ty,      tx + tw, ty + th, rr);
-        ctx.arcTo(tx + tw, ty + th, tx,      ty + th, rr);
-        ctx.arcTo(tx,      ty + th, tx,      ty,      rr);
-        ctx.arcTo(tx,      ty,      tx + tw, ty,      rr);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-
-        ctx.textAlign = 'left';
-        ctx.fillStyle = '#1d1d1f';
-        ctx.font      = `bold ${11 * d}px -apple-system, sans-serif`;
-        const nameStr = doc.name.length > 22 ? doc.name.slice(0, 21) + '…' : doc.name;
-        ctx.fillText(nameStr, tx + pd, ty + pd + lh * 0.8);
-        ctx.font      = `${10 * d}px -apple-system, sans-serif`;
-        ctx.fillStyle = '#86868b';
-        ctx.fillText(`Weight: ${(doc.weight * 100).toFixed(0)}%  ·  Area: ${doc.area}`, tx + pd, ty + pd + lh * 1.9);
-        ctx.fillText(`Links: ${doc.links}  ·  Queries: ${doc.queries}`, tx + pd, ty + pd + lh * 2.9);
-      }
-
-      raf = requestAnimationFrame(draw);
-    };
-
-    const onDown = e => {
-      st.current.drag    = { x: e.clientX, y: e.clientY };
-      st.current.dragged = false;
-    };
-    const onMove = e => {
-      const d  = dpr();
-      const rc = canvas.getBoundingClientRect();
-      const mx = (e.clientX - rc.left) * d;
-      const my = (e.clientY - rc.top)  * d;
-
-      if (st.current.drag) {
-        const dx = e.clientX - st.current.drag.x;
-        const dy = e.clientY - st.current.drag.y;
-        if (Math.abs(dx) > 2 || Math.abs(dy) > 2) st.current.dragged = true;
-        st.current.ry += dx * 0.006;
-        st.current.rx = Math.max(-1.4, Math.min(1.4, st.current.rx + dy * 0.006));
-        st.current.drag = { x: e.clientX, y: e.clientY };
-      }
-
-      const { pr, selDocs } = renderRef.current;
-      let found = null;
-      for (let i = selDocs.length - 1; i >= 0; i--) {
-        const p  = pr[i];
-        if (!p) continue;
-        const r  = (20 + selDocs[i].weight * 20) * p.s * d;
-        const dx = mx - p.x, dy = my - p.y;
-        if (dx * dx + dy * dy <= r * r) { found = i; break; }
-      }
-      st.current.hover    = found;
-      canvas.style.cursor = found !== null ? 'pointer' : (st.current.drag ? 'grabbing' : 'grab');
-    };
-    const onUp = () => {
-      if (!st.current.dragged && st.current.hover !== null) {
-        const { selDocs } = renderRef.current;
-        if (selDocs[st.current.hover]) toggleRef.current(selDocs[st.current.hover].id);
-      }
-      st.current.drag    = null;
-      st.current.dragged = false;
-    };
-    const onLeave = () => { st.current.drag = null; st.current.hover = null; };
-
-    const ro = new ResizeObserver(resize);
-    ro.observe(canvas.parentElement || canvas);
-    resize();
-    draw();
-
-    canvas.addEventListener('mousedown',  onDown);
-    canvas.addEventListener('mousemove',  onMove);
-    canvas.addEventListener('mouseup',    onUp);
-    canvas.addEventListener('mouseleave', onLeave);
+    });
+    ro.observe(el);
 
     return () => {
-      cancelAnimationFrame(raf);
       ro.disconnect();
-      canvas.removeEventListener('mousedown',  onDown);
-      canvas.removeEventListener('mousemove',  onMove);
-      canvas.removeEventListener('mouseup',    onUp);
-      canvas.removeEventListener('mouseleave', onLeave);
+      el.innerHTML = '';
+      graphRef.current = null;
     };
   }, []);
+
+  // Update graph data whenever selection changes
+  useEffect(() => {
+    const g = graphRef.current;
+    if (!g) return;
+
+    if (selected.length < 3) {
+      g.graphData({ nodes: [], links: [] });
+      return;
+    }
+
+    const selDocs  = documents.filter(d => selected.includes(d.id));
+    const selEdges = GRAPH_EDGES.filter(e => selected.includes(e.from) && selected.includes(e.to));
+
+    g.graphData({
+      nodes: selDocs.map(d => ({
+        id:      d.id,
+        name:    d.name,
+        type:    d.type,
+        weight:  d.weight,
+        area:    d.area,
+        links:   d.links,
+        queries: d.queries,
+      })),
+      links: selEdges.map(e => ({
+        source: e.from,
+        target: e.to,
+        weight: e.weight,
+      })),
+    });
+  }, [selected]);
 
   const n        = selected.length;
   const selEdges = GRAPH_EDGES.filter(e => selected.includes(e.from) && selected.includes(e.to));
@@ -772,7 +623,7 @@ function GraphsPage({ selected, onToggle }) {
         )}
         {n >= 3 && (
           <span style={{ marginLeft:'auto', fontSize:'11px', color:'#c7c7cc' }}>
-            Drag to rotate · click to remove
+            Drag to rotate · scroll to zoom · click to remove
           </span>
         )}
       </div>
@@ -780,7 +631,7 @@ function GraphsPage({ selected, onToggle }) {
       <div style={{ flex:1, position:'relative', overflow:'hidden' }}>
         {n < 3 && (
           <div style={{
-            position:'absolute', inset:0, pointerEvents:'none',
+            position:'absolute', inset:0, zIndex:1, pointerEvents:'none',
             display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
             gap:'10px',
           }}>
@@ -795,10 +646,7 @@ function GraphsPage({ selected, onToggle }) {
             )}
           </div>
         )}
-        <canvas
-          ref={canvasRef}
-          style={{ width:'100%', height:'100%', display:'block', cursor: n >= 3 ? 'grab' : 'default' }}
-        />
+        <div ref={containerRef} style={{ position:'absolute', inset:0 }} />
       </div>
     </div>
   );
