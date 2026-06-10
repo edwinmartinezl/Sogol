@@ -549,8 +549,9 @@ function GraphsPage({ selected, onToggle }) {
   const canvasRef  = useRef(null);
   const selRef     = useRef(selected);
   const toggleRef  = useRef(onToggle);
-  const projRef    = useRef([]);
-  const st         = useRef({ ry:0.5, rx:0.2, drag:null, hover:null, dragged:false });
+  // shared between draw loop and mouse handlers
+  const renderRef  = useRef({ pr: [], selDocs: [] });
+  const st         = useRef({ ry: 0.5, rx: 0.2, drag: null, hover: null, dragged: false });
 
   useEffect(() => { selRef.current    = selected; }, [selected]);
   useEffect(() => { toggleRef.current = onToggle; }, [onToggle]);
@@ -574,21 +575,32 @@ function GraphsPage({ selected, onToggle }) {
       const cx  = W / 2, cy = H / 2;
       ctx.clearRect(0, 0, W, H);
 
-      // Gentle auto-rotation when idle
+      // Only render selected documents
+      const sel     = selRef.current;
+      const selDocs = documents.filter(doc => sel.includes(doc.id));
+
+      if (selDocs.length === 0) {
+        renderRef.current = { pr: [], selDocs: [] };
+        raf = requestAnimationFrame(draw);
+        return;
+      }
+
       if (!st.current.drag) st.current.ry += 0.004;
 
-      // Transform 3D positions
-      const t  = GRAPH_BASE_3D.map(p => _rotX(_rotY(p, st.current.ry), st.current.rx));
-      const pr = t.map(p => _proj(p, cx, cy));
-      projRef.current = pr;
+      // 3D positions computed for the current selection size
+      const base3d   = _fibSphere(selDocs.length, 160);
+      const selEdges = GRAPH_EDGES.filter(e => sel.includes(e.from) && sel.includes(e.to));
 
-      // Draw order: back → front
-      const ord = documents.map((_, i) => i).sort((a, b) => t[a].z - t[b].z);
+      const t  = base3d.map(p => _rotX(_rotY(p, st.current.ry), st.current.rx));
+      const pr = t.map(p => _proj(p, cx, cy));
+      renderRef.current = { pr, selDocs };
+
+      const ord = selDocs.map((_, i) => i).sort((a, b) => t[a].z - t[b].z);
 
       // Edges
-      GRAPH_EDGES.forEach(e => {
-        const ai = documents.findIndex(d => d.id === e.from);
-        const bi = documents.findIndex(d => d.id === e.to);
+      selEdges.forEach(e => {
+        const ai = selDocs.findIndex(d => d.id === e.from);
+        const bi = selDocs.findIndex(d => d.id === e.to);
         if (ai < 0 || bi < 0) return;
         ctx.beginPath();
         ctx.moveTo(pr[ai].x, pr[ai].y);
@@ -598,34 +610,29 @@ function GraphsPage({ selected, onToggle }) {
         ctx.stroke();
       });
 
-      // Nodes
-      const sel = selRef.current;
+      // Nodes (all visible nodes are selected by definition)
       ord.forEach(i => {
-        const doc   = documents[i];
+        const doc   = selDocs[i];
         const p     = pr[i];
         const depth = Math.min(1, Math.max(0, (t[i].z + 200) / 400));
         const r     = (20 + doc.weight * 20) * p.s * d;
-        const isSel = sel.includes(doc.id);
         const isHov = st.current.hover === i;
 
-        // Fill
         ctx.globalAlpha = 0.5 + depth * 0.5;
         ctx.beginPath();
         ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
         ctx.fillStyle = GRAPH_COLOR[doc.type] || '#888888';
         ctx.fill();
 
-        // Selection / hover ring
-        if (isSel || isHov) {
+        if (isHov) {
           ctx.globalAlpha = 1;
           ctx.beginPath();
           ctx.arc(p.x, p.y, r + 3 * d, 0, Math.PI * 2);
-          ctx.strokeStyle = isSel ? '#0071e3' : '#555555';
+          ctx.strokeStyle = '#0071e3';
           ctx.lineWidth   = 2 * d;
           ctx.stroke();
         }
 
-        // Label
         const lbl = doc.name.length > 14 ? doc.name.slice(0, 13) + '…' : doc.name;
         const fs  = Math.max(9 * d, Math.round(11 * p.s * d));
         ctx.globalAlpha = 0.45 + depth * 0.55;
@@ -638,8 +645,8 @@ function GraphsPage({ selected, onToggle }) {
 
       // Tooltip
       const hi = st.current.hover;
-      if (hi !== null) {
-        const doc  = documents[hi];
+      if (hi !== null && hi < selDocs.length) {
+        const doc  = selDocs[hi];
         const p    = pr[hi];
         const pd   = 10 * d, lh = 16 * d;
         const tw   = 180 * d, th = 76 * d;
@@ -650,7 +657,6 @@ function GraphsPage({ selected, onToggle }) {
         if (ty < 8 * d) ty = 8 * d;
         if (ty + th > H - 8 * d) ty = H - th - 8 * d;
 
-        // Card background
         ctx.fillStyle   = 'rgba(255,255,255,0.97)';
         ctx.strokeStyle = '#e0e0e5';
         ctx.lineWidth   = d;
@@ -665,14 +671,13 @@ function GraphsPage({ selected, onToggle }) {
         ctx.fill();
         ctx.stroke();
 
-        // Card text
-        ctx.textAlign   = 'left';
-        ctx.fillStyle   = '#1d1d1f';
-        ctx.font        = `bold ${11 * d}px -apple-system, sans-serif`;
-        const nameStr   = doc.name.length > 22 ? doc.name.slice(0, 21) + '…' : doc.name;
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#1d1d1f';
+        ctx.font      = `bold ${11 * d}px -apple-system, sans-serif`;
+        const nameStr = doc.name.length > 22 ? doc.name.slice(0, 21) + '…' : doc.name;
         ctx.fillText(nameStr, tx + pd, ty + pd + lh * 0.8);
-        ctx.font        = `${10 * d}px -apple-system, sans-serif`;
-        ctx.fillStyle   = '#86868b';
+        ctx.font      = `${10 * d}px -apple-system, sans-serif`;
+        ctx.fillStyle = '#86868b';
         ctx.fillText(`Weight: ${(doc.weight * 100).toFixed(0)}%  ·  Area: ${doc.area}`, tx + pd, ty + pd + lh * 1.9);
         ctx.fillText(`Links: ${doc.links}  ·  Queries: ${doc.queries}`, tx + pd, ty + pd + lh * 2.9);
       }
@@ -680,7 +685,6 @@ function GraphsPage({ selected, onToggle }) {
       raf = requestAnimationFrame(draw);
     };
 
-    // Mouse handlers
     const onDown = e => {
       st.current.drag    = { x: e.clientX, y: e.clientY };
       st.current.dragged = false;
@@ -696,26 +700,27 @@ function GraphsPage({ selected, onToggle }) {
         const dy = e.clientY - st.current.drag.y;
         if (Math.abs(dx) > 2 || Math.abs(dy) > 2) st.current.dragged = true;
         st.current.ry += dx * 0.006;
-        // Clamp X rotation to avoid flipping
         st.current.rx = Math.max(-1.4, Math.min(1.4, st.current.rx + dy * 0.006));
         st.current.drag = { x: e.clientX, y: e.clientY };
       }
 
-      // Hit test
+      const { pr, selDocs } = renderRef.current;
       let found = null;
-      for (let i = documents.length - 1; i >= 0; i--) {
-        const p  = projRef.current[i];
+      for (let i = selDocs.length - 1; i >= 0; i--) {
+        const p  = pr[i];
         if (!p) continue;
-        const r  = (20 + documents[i].weight * 20) * p.s * d;
+        const r  = (20 + selDocs[i].weight * 20) * p.s * d;
         const dx = mx - p.x, dy = my - p.y;
         if (dx * dx + dy * dy <= r * r) { found = i; break; }
       }
-      st.current.hover         = found;
-      canvas.style.cursor      = found !== null ? 'pointer' : (st.current.drag ? 'grabbing' : 'grab');
+      st.current.hover    = found;
+      canvas.style.cursor = found !== null ? 'pointer' : (st.current.drag ? 'grabbing' : 'grab');
     };
     const onUp = () => {
-      if (!st.current.dragged && st.current.hover !== null)
-        toggleRef.current(documents[st.current.hover].id);
+      if (!st.current.dragged && st.current.hover !== null) {
+        const { selDocs } = renderRef.current;
+        if (selDocs[st.current.hover]) toggleRef.current(selDocs[st.current.hover].id);
+      }
       st.current.drag    = null;
       st.current.dragged = false;
     };
@@ -741,8 +746,9 @@ function GraphsPage({ selected, onToggle }) {
     };
   }, []);
 
-  const n  = selected.length;
-  const ec = GRAPH_EDGES.length;
+  const n        = selected.length;
+  const selEdges = GRAPH_EDGES.filter(e => selected.includes(e.from) && selected.includes(e.to));
+  const ec       = selEdges.length;
 
   return (
     <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', fontFamily:C.font }}>
@@ -750,7 +756,7 @@ function GraphsPage({ selected, onToggle }) {
         padding:'10px 24px', borderBottom:C.border, flexShrink:0,
         display:'flex', alignItems:'center', gap:'12px', background:C.bg,
       }}>
-        <span style={{ fontSize:'13px', color:C.muted }}>{documents.length} nodes</span>
+        <span style={{ fontSize:'13px', color:C.muted }}>{n} node{n !== 1 ? 's' : ''}</span>
         <span style={{ color:C.muted }}>·</span>
         <span style={{ fontSize:'13px', color:C.muted }}>{ec} edge{ec !== 1 ? 's' : ''}</span>
         {n >= 3 && (
@@ -764,14 +770,31 @@ function GraphsPage({ selected, onToggle }) {
             Graph ready
           </div>
         )}
-        <span style={{ marginLeft:'auto', fontSize:'11px', color:'#c7c7cc' }}>
-          Drag to rotate · click to select
-        </span>
+        {n > 0 && (
+          <span style={{ marginLeft:'auto', fontSize:'11px', color:'#c7c7cc' }}>
+            Drag to rotate · click to remove
+          </span>
+        )}
       </div>
-      <canvas
-        ref={canvasRef}
-        style={{ flex:1, width:'100%', display:'block', cursor:'grab', background:C.bg }}
-      />
+
+      <div style={{ flex:1, position:'relative', overflow:'hidden' }}>
+        {n === 0 && (
+          <div style={{
+            position:'absolute', inset:0, pointerEvents:'none',
+            display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+            gap:'10px',
+          }}>
+            <i className="ti ti-circles-relation" style={{ fontSize:'42px', color:'#e0e0e5' }} />
+            <span style={{ fontSize:'13px', color:C.muted }}>
+              Selecciona documentos desde el sidebar para construir el grafo
+            </span>
+          </div>
+        )}
+        <canvas
+          ref={canvasRef}
+          style={{ width:'100%', height:'100%', display:'block', cursor: n > 0 ? 'grab' : 'default' }}
+        />
+      </div>
     </div>
   );
 }
