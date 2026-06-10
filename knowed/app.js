@@ -514,87 +514,142 @@ function ChatPage({ selected, onRemove, llm, onTrackQuery }) {
   );
 }
 
-// ── Graphs page (3d-force-graph) ─────────────────────────────────────────────
+// ── Graphs page (D3 force layout 2D) ─────────────────────────────────────────
 
 function GraphsPage({ selected, onToggle }) {
-  const containerRef = useRef(null);
-  const graphRef     = useRef(null);
-  const toggleRef    = useRef(onToggle);
+  const svgRef    = useRef(null);
+  const simRef    = useRef(null);
+  const toggleRef = useRef(onToggle);
+  const [tip, setTip] = useState(null);
 
   useEffect(() => { toggleRef.current = onToggle; }, [onToggle]);
 
-  // Init ForceGraph3D once on mount
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el || typeof ForceGraph3D === 'undefined') return;
+    const svgEl = svgRef.current;
+    if (!svgEl) return;
 
-    const g = ForceGraph3D()(el)
-      .backgroundColor('#0d1117')
-      .showNavInfo(false)
-      .nodeId('id')
-      .nodeVal(node => Math.max(2, node.weight * 18))
-      .nodeColor(node => GRAPH_COLOR[node.type] || '#888888')
-      .nodeOpacity(0.92)
-      .nodeLabel(node =>
-        `<div style="background:rgba(0,0,0,0.75);color:#fff;padding:6px 10px;border-radius:8px;font-size:12px;line-height:1.5;font-family:-apple-system,sans-serif;">
-          <strong>${node.name}</strong><br/>
-          ${node.area} · ${(node.weight * 100).toFixed(0)}% weight<br/>
-          <span style="color:#aaa">${node.links} links · ${node.queries} queries</span>
-        </div>`
-      )
-      .linkColor(() => 'rgba(120,140,200,0.4)')
-      .linkWidth(link => (link.weight || 1) * 1.5)
-      .linkDirectionalParticles(link => (link.weight || 1) * 3)
-      .linkDirectionalParticleWidth(link => (link.weight || 1) * 2)
-      .linkDirectionalParticleColor(() => '#a0aaff')
-      .linkDirectionalParticleSpeed(0.005)
-      .onNodeClick(node => toggleRef.current(node.id));
+    const svg = d3.select(svgEl);
+    svg.selectAll('*').remove();
+    setTip(null);
 
-    graphRef.current = g;
+    if (selected.length < 3) return;
 
-    const ro = new ResizeObserver(() => {
-      if (graphRef.current) {
-        graphRef.current.width(el.offsetWidth).height(el.offsetHeight);
-      }
-    });
-    ro.observe(el);
-
-    return () => {
-      ro.disconnect();
-      el.innerHTML = '';
-      graphRef.current = null;
-    };
-  }, []);
-
-  // Update graph data whenever selection changes
-  useEffect(() => {
-    const g = graphRef.current;
-    if (!g) return;
-
-    if (selected.length < 3) {
-      g.graphData({ nodes: [], links: [] });
-      return;
-    }
+    const W = svgEl.clientWidth  || 800;
+    const H = svgEl.clientHeight || 600;
 
     const selDocs  = documents.filter(d => selected.includes(d.id));
     const selEdges = GRAPH_EDGES.filter(e => selected.includes(e.from) && selected.includes(e.to));
+    const nodes    = selDocs.map(d => ({ ...d }));
+    const links    = selEdges.map(e => ({ source: e.from, target: e.to, weight: e.weight }));
 
-    g.graphData({
-      nodes: selDocs.map(d => ({
-        id:      d.id,
-        name:    d.name,
-        type:    d.type,
-        weight:  d.weight,
-        area:    d.area,
-        links:   d.links,
-        queries: d.queries,
-      })),
-      links: selEdges.map(e => ({
-        source: e.from,
-        target: e.to,
-        weight: e.weight,
-      })),
-    });
+    const nodeR = d => 8 + d.weight * 16;
+
+    // Zoom / pan
+    const g = svg.append('g');
+    svg.call(
+      d3.zoom().scaleExtent([0.2, 5]).on('zoom', ev => g.attr('transform', ev.transform))
+    ).on('dblclick.zoom', null);
+
+    // Links
+    const linkSel = g.append('g')
+      .selectAll('line')
+      .data(links)
+      .join('line')
+      .attr('stroke', '#c7c7cc')
+      .attr('stroke-width', d => 1 + (d.weight || 1))
+      .attr('stroke-linecap', 'round');
+
+    // Link weight label (only when weight > 1)
+    const linkLblSel = g.append('g')
+      .selectAll('text')
+      .data(links.filter(l => (l.weight || 1) > 1))
+      .join('text')
+      .text(d => d.weight + '×')
+      .attr('font-size', '10px')
+      .attr('font-family', "-apple-system, sans-serif")
+      .attr('fill', '#86868b')
+      .attr('text-anchor', 'middle')
+      .attr('dominant-baseline', 'middle')
+      .attr('pointer-events', 'none');
+
+    // Nodes
+    const nodeSel = g.append('g')
+      .selectAll('circle')
+      .data(nodes)
+      .join('circle')
+      .attr('r', nodeR)
+      .attr('fill', d => GRAPH_COLOR[d.type] || '#888')
+      .attr('fill-opacity', 0.9)
+      .attr('stroke', '#ffffff')
+      .attr('stroke-width', 2.5)
+      .attr('cursor', 'pointer')
+      .on('mouseenter', (event, d) => {
+        const rc = svgEl.getBoundingClientRect();
+        setTip({ x: event.clientX - rc.left + 14, y: event.clientY - rc.top - 8, doc: d });
+        d3.select(event.currentTarget).attr('stroke', C.accent).attr('stroke-width', 3);
+      })
+      .on('mousemove', event => {
+        const rc = svgEl.getBoundingClientRect();
+        setTip(p => p ? { ...p, x: event.clientX - rc.left + 14, y: event.clientY - rc.top - 8 } : null);
+      })
+      .on('mouseleave', event => {
+        setTip(null);
+        d3.select(event.currentTarget).attr('stroke', '#ffffff').attr('stroke-width', 2.5);
+      })
+      .on('click', (event, d) => { event.stopPropagation(); toggleRef.current(d.id); })
+      .call(
+        d3.drag()
+          .on('start', (event, d) => {
+            if (!event.active) simRef.current.alphaTarget(0.3).restart();
+            d.fx = d.x; d.fy = d.y;
+          })
+          .on('drag',  (event, d) => { d.fx = event.x; d.fy = event.y; })
+          .on('end',   (event, d) => {
+            if (!event.active) simRef.current.alphaTarget(0);
+            d.fx = null; d.fy = null;
+          })
+      );
+
+    // Node labels
+    const labelSel = g.append('g')
+      .selectAll('text')
+      .data(nodes)
+      .join('text')
+      .text(d => d.name.length > 18 ? d.name.slice(0, 17) + '…' : d.name)
+      .attr('font-size', '11px')
+      .attr('font-family', "-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif")
+      .attr('fill', '#1d1d1f')
+      .attr('text-anchor', 'middle')
+      .attr('pointer-events', 'none');
+
+    // Simulation
+    const sim = d3.forceSimulation(nodes)
+      .force('link',      d3.forceLink(links).id(d => d.id).distance(180).strength(0.7))
+      .force('charge',    d3.forceManyBody().strength(-600))
+      .force('center',    d3.forceCenter(W / 2, H / 2))
+      .force('collision', d3.forceCollide(d => nodeR(d) + 10))
+      .on('tick', () => {
+        linkSel
+          .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+          .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+
+        linkLblSel
+          .attr('x', d => (d.source.x + d.target.x) / 2)
+          .attr('y', d => (d.source.y + d.target.y) / 2);
+
+        nodeSel.attr('cx', d => d.x).attr('cy', d => d.y);
+
+        labelSel
+          .attr('x', d => d.x)
+          .attr('y', d => d.y + nodeR(d) + 14);
+      });
+
+    simRef.current = sim;
+
+    return () => {
+      sim.stop();
+      svg.on('.zoom', null);
+    };
   }, [selected]);
 
   const n        = selected.length;
@@ -623,12 +678,12 @@ function GraphsPage({ selected, onToggle }) {
         )}
         {n >= 3 && (
           <span style={{ marginLeft:'auto', fontSize:'11px', color:'#c7c7cc' }}>
-            Drag to rotate · scroll to zoom · click to remove
+            Drag nodes · scroll to zoom · click to remove
           </span>
         )}
       </div>
 
-      <div style={{ flex:1, position:'relative', overflow:'hidden' }}>
+      <div style={{ flex:1, position:'relative', overflow:'hidden', background:C.bg }}>
         {n < 3 && (
           <div style={{
             position:'absolute', inset:0, zIndex:1, pointerEvents:'none',
@@ -646,7 +701,27 @@ function GraphsPage({ selected, onToggle }) {
             )}
           </div>
         )}
-        <div ref={containerRef} style={{ position:'absolute', inset:0 }} />
+
+        <svg ref={svgRef} style={{ width:'100%', height:'100%', display:'block' }} />
+
+        {tip && (
+          <div style={{
+            position:'absolute', left:tip.x, top:tip.y, zIndex:10,
+            background:C.bg, border:C.border, borderRadius:'10px',
+            padding:'10px 14px', minWidth:'160px',
+            boxShadow:'0 4px 20px rgba(0,0,0,0.09)',
+            pointerEvents:'none',
+          }}>
+            <div style={{ fontSize:'12px', fontWeight:600, color:C.text, marginBottom:'4px' }}>
+              {tip.doc.name}
+            </div>
+            <div style={{ fontSize:'11px', color:C.muted, lineHeight:'1.7' }}>
+              {tip.doc.area}<br/>
+              Weight: {(tip.doc.weight * 100).toFixed(0)}%<br/>
+              Links: {tip.doc.links} · Queries: {tip.doc.queries}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
