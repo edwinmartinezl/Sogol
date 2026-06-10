@@ -1,8 +1,8 @@
 /* global React, ReactDOM */
-const { useState } = React;
+const { useState, useRef, useEffect } = React;
 const { createRoot } = ReactDOM;
 
-// ── Mock data (mirrors data/mock.js) ─────────────────────────────────────────
+// ── Data (mirrors data/mock.js) ───────────────────────────────────────────────
 
 const documents = [
   { id:'doc-001', name:'Ventas Q1 2026',          type:'xlsx', size:204800,  weight:0.85, links:3,  graphs:5,  queries:12, area:'Comercial',  date:'2026-03-31' },
@@ -13,6 +13,15 @@ const documents = [
   { id:'doc-006', name:'Métricas de Soporte',      type:'csv',  size:153600,  weight:0.55, links:0,  graphs:0,  queries:41, area:'Soporte',     date:'2026-05-20' },
   { id:'doc-007', name:'Plan Estratégico 2026',    type:'pdf',  size:3145728, weight:0.99, links:22, graphs:11, queries:5,  area:'Dirección',   date:'2026-01-02' },
 ];
+
+const CHAT_HISTORY = [
+  { role:'user', text:'¿Hay relación entre los gastos de IT y las caídas en ventas del Q1?' },
+  { role:'ai',   text:'Sí, encontré una correlación importante. En febrero los costos de IT subieron 38%, coincidiendo con una caída del 22% en ventas ese mismo mes.', insight:'El pico de gasto en IT precede en 5 días la caída de ventas — posible downtime durante cierre de órdenes.', sources:['doc-001','doc-002'] },
+  { role:'user', text:'¿Qué mes tuvo mejor ratio ventas vs costo IT?' },
+  { role:'ai',   text:'Enero fue el más eficiente — $8.40 en ventas por cada $1 de IT. Marzo mejoró vs febrero pero no recuperó enero.', sources:['doc-001','doc-002'] },
+];
+
+const LLM_LABELS = { claude:'Claude 3.5', gpt4o:'GPT-4o', gemini:'Gemini', llama:'Llama' };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -50,12 +59,63 @@ function TypeBadge({ type }) {
   );
 }
 
+// ── Message bubble (shared by QueryPage) ──────────────────────────────────────
+
+function MessageBubble({ msg }) {
+  const isUser = msg.role === 'user';
+  const srcDocs = msg.sources
+    ? msg.sources.map(id => documents.find(d => d.id === id)).filter(Boolean)
+    : [];
+
+  return (
+    <div style={{
+      display:'flex',
+      justifyContent: isUser ? 'flex-end' : 'flex-start',
+      padding: isUser ? '4px 0 4px 80px' : '4px 80px 4px 0',
+      marginBottom:'6px',
+    }}>
+      <div style={{ maxWidth:'100%' }}>
+        <div style={{
+          padding:'10px 14px', fontSize:'13px', lineHeight:'1.6',
+          borderRadius: isUser ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+          background: isUser ? C.accent : C.surface,
+          color: isUser ? '#fff' : C.text,
+        }}>
+          {msg.text}
+          {msg.insight && (
+            <div style={{
+              marginTop:'10px', padding:'10px 12px',
+              background:C.bg, border:C.border, borderRadius:'8px',
+            }}>
+              <div style={{
+                fontSize:'10px', fontWeight:600, color:C.accent,
+                textTransform:'uppercase', letterSpacing:'0.5px', marginBottom:'5px',
+              }}>Emergent insight</div>
+              <div style={{ fontSize:'12px', color:C.text, lineHeight:'1.5' }}>{msg.insight}</div>
+            </div>
+          )}
+        </div>
+        {srcDocs.length > 0 && (
+          <div style={{ display:'flex', gap:'4px', marginTop:'6px', flexWrap:'wrap' }}>
+            {srcDocs.map(doc => (
+              <span key={doc.id} style={{
+                fontSize:'10px', padding:'2px 8px', borderRadius:'10px',
+                background:C.surface, border:C.border, color:C.muted, whiteSpace:'nowrap',
+              }}>{doc.name}</span>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 
 const NAV = [
   { icon:'ti-files',        label:'Documents', key:'documents' },
   { icon:'ti-chart-bar',    label:'Graphs',    key:'graphs'    },
-  { icon:'ti-terminal',     label:'Query',     key:'query'     },
+  { icon:'ti-messages',      label:'Chat',      key:'chat'      },
   { icon:'ti-shield-check', label:'Policies',  key:'policies'  },
 ];
 
@@ -94,7 +154,6 @@ function Sidebar({ page, onNav, selected, onToggle }) {
       background:C.surface, borderRight:C.border,
       display:'flex', flexDirection:'column', overflow:'hidden', fontFamily:C.font,
     }}>
-      {/* Logo */}
       <div style={{ padding:'16px 14px 12px', borderBottom:C.border, flexShrink:0 }}>
         <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
           <div style={{
@@ -109,7 +168,6 @@ function Sidebar({ page, onNav, selected, onToggle }) {
         </div>
       </div>
 
-      {/* Search */}
       <div style={{ padding:'8px 10px', borderBottom:C.border, flexShrink:0 }}>
         <div style={{ position:'relative' }}>
           <i className="ti ti-search" style={{
@@ -117,9 +175,7 @@ function Sidebar({ page, onNav, selected, onToggle }) {
             fontSize:'13px', color:C.muted, pointerEvents:'none',
           }} />
           <input
-            type="text"
-            placeholder="Search docs…"
-            value={search}
+            type="text" placeholder="Search docs…" value={search}
             onChange={e => setSearch(e.target.value)}
             style={{
               width:'100%', boxSizing:'border-box',
@@ -131,32 +187,23 @@ function Sidebar({ page, onNav, selected, onToggle }) {
         </div>
       </div>
 
-      {/* Nav */}
       <nav style={{ padding:'6px 8px 0', flexShrink:0 }}>
         {NAV.map(item => (
-          <div
-            key={item.key}
-            onClick={() => onNav(item.key)}
-            style={{
-              display:'flex', alignItems:'center', gap:'8px',
-              padding:'6px 10px', borderRadius:'7px', marginBottom:'1px',
-              cursor:'pointer', fontSize:'13px', fontFamily:C.font,
-              fontWeight: page === item.key ? 500 : 400,
-              color:      page === item.key ? C.accent : C.text,
-              background: page === item.key ? C.accent+'14' : 'transparent',
-            }}
-          >
+          <div key={item.key} onClick={() => onNav(item.key)} style={{
+            display:'flex', alignItems:'center', gap:'8px',
+            padding:'6px 10px', borderRadius:'7px', marginBottom:'1px',
+            cursor:'pointer', fontSize:'13px', fontFamily:C.font,
+            fontWeight: page === item.key ? 500 : 400,
+            color:      page === item.key ? C.accent : C.text,
+            background: page === item.key ? C.accent+'14' : 'transparent',
+          }}>
             <i className={'ti '+item.icon} style={{ fontSize:'15px' }} />
             {item.label}
           </div>
         ))}
       </nav>
 
-      {/* Doc list */}
-      <div style={{
-        flex:1, overflow:'auto', paddingTop:'4px',
-        borderTop:C.border, marginTop:'8px',
-      }}>
+      <div style={{ flex:1, overflow:'auto', paddingTop:'4px', borderTop:C.border, marginTop:'8px' }}>
         {thisMonth.length > 0 && (
           <>
             <div style={{
@@ -186,7 +233,6 @@ function Sidebar({ page, onNav, selected, onToggle }) {
         )}
       </div>
 
-      {/* Upload */}
       <div style={{ padding:'10px', borderTop:C.border, flexShrink:0 }}>
         <button style={{
           width:'100%', display:'flex', alignItems:'center', justifyContent:'center', gap:'6px',
@@ -203,33 +249,39 @@ function Sidebar({ page, onNav, selected, onToggle }) {
 
 // ── Topbar ────────────────────────────────────────────────────────────────────
 
-function Topbar({ selected, onRemove }) {
-  const [llm, setLlm] = useState('claude');
+function Topbar({ selected, onRemove, onClearAll, llm, onLlmChange }) {
+  const n = selected.length;
   const selDocs = documents.filter(d => selected.includes(d.id));
+
+  const badge = n === 0 ? null
+    : n < 3
+      ? { label:`${n} doc${n>1?'s':''} selected`, color:C.muted,   bg:C.surface,       icon:null }
+      : { label:`Graph ready · ${n} docs`,         color:C.accent,  bg:C.accent+'12',   icon:'ti-vector-triangle' };
 
   return (
     <div style={{
-      height:'48px', flexShrink:0, background:C.bg,
-      borderBottom:C.border, display:'flex', alignItems:'center',
-      padding:'0 20px', gap:'8px', fontFamily:C.font,
+      height:'48px', flexShrink:0, background:C.bg, borderBottom:C.border,
+      display:'flex', alignItems:'center', padding:'0 16px', gap:'8px', fontFamily:C.font,
     }}>
-      <div style={{ flex:1, display:'flex', alignItems:'center', gap:'6px', overflow:'hidden' }}>
-        {selDocs.length === 0
+      {/* Pills */}
+      <div style={{
+        flex:1, display:'flex', alignItems:'center', gap:'6px',
+        overflow:'hidden', minWidth:0,
+      }}>
+        {n === 0
           ? <span style={{ fontSize:'12px', color:C.muted }}>
               Select documents from the sidebar to cross-reference
             </span>
           : selDocs.map(doc => (
             <div key={doc.id} style={{
-              display:'inline-flex', alignItems:'center', gap:'5px',
+              display:'inline-flex', alignItems:'center', gap:'5px', flexShrink:0,
               background:C.accent+'12', border:'0.5px solid '+C.accent+'40',
               borderRadius:'20px', padding:'3px 8px 3px 10px',
               fontSize:'11px', color:C.accent, fontWeight:500, whiteSpace:'nowrap',
             }}>
               {doc.name}
-              <span
-                onClick={() => onRemove(doc.id)}
-                style={{ cursor:'pointer', display:'flex', alignItems:'center', opacity:0.7 }}
-              >
+              <span onClick={() => onRemove(doc.id)}
+                style={{ cursor:'pointer', display:'flex', alignItems:'center', opacity:0.7 }}>
                 <i className="ti ti-x" style={{ fontSize:'10px' }} />
               </span>
             </div>
@@ -237,16 +289,35 @@ function Topbar({ selected, onRemove }) {
         }
       </div>
 
-      <select
-        value={llm}
-        onChange={e => setLlm(e.target.value)}
-        style={{
-          fontSize:'12px', padding:'5px 10px',
-          border:C.border, borderRadius:'7px',
-          background:C.surface, color:C.text,
-          outline:'none', cursor:'pointer', fontFamily:C.font,
-        }}
-      >
+      {/* Clear all */}
+      {n >= 2 && (
+        <button onClick={onClearAll} style={{
+          flexShrink:0, padding:'4px 10px', fontSize:'11px', fontWeight:500,
+          color:C.muted, background:'transparent', border:C.border,
+          borderRadius:'7px', cursor:'pointer', fontFamily:C.font,
+        }}>Clear all</button>
+      )}
+
+      {/* Status badge */}
+      {badge && (
+        <div style={{
+          flexShrink:0, display:'flex', alignItems:'center', gap:'5px',
+          padding:'4px 10px', borderRadius:'7px', fontSize:'11px', fontWeight:500,
+          color:badge.color, background:badge.bg,
+          border: n >= 3 ? '0.5px solid '+C.accent+'30' : C.border,
+        }}>
+          {badge.icon && <i className={'ti '+badge.icon} style={{ fontSize:'12px' }} />}
+          {badge.label}
+        </div>
+      )}
+
+      {/* LLM selector */}
+      <select value={llm} onChange={e => onLlmChange(e.target.value)} style={{
+        flexShrink:0, fontSize:'12px', padding:'5px 10px',
+        border:C.border, borderRadius:'7px',
+        background:C.surface, color:C.text,
+        outline:'none', cursor:'pointer', fontFamily:C.font,
+      }}>
         <option value="claude">Claude 3.5</option>
         <option value="gpt4o">GPT-4o</option>
         <option value="gemini">Gemini</option>
@@ -256,27 +327,24 @@ function Topbar({ selected, onRemove }) {
   );
 }
 
-// ── Documents page ────────────────────────────────────────────────────────────
+// ── Documents page (table always 100%) ────────────────────────────────────────
 
 function DocumentsPage({ selected, onToggle }) {
   return (
-    <div style={{ padding:'28px', overflow:'auto', flex:1, fontFamily:C.font }}>
+    <div style={{ padding:'24px 28px', overflow:'auto', flex:1, fontFamily:C.font }}>
       <h1 style={{
         fontSize:'20px', fontWeight:600, color:C.text,
-        marginBottom:'18px', letterSpacing:'-0.3px',
+        marginBottom:'16px', letterSpacing:'-0.3px',
       }}>Documents</h1>
-
       <div style={{ border:C.border, borderRadius:'10px', overflow:'hidden', background:C.bg }}>
         <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'13px' }}>
           <thead>
             <tr>
-              {['', 'Name', 'Type', 'Area', 'Date', 'Size', 'Weight', 'Links', 'Graphs', 'Queries'].map((h, i) => (
+              {['','Name','Type','Area','Date','Size','Weight','Links','Graphs','Queries'].map((h,i) => (
                 <th key={i} style={{
-                  padding:'8px 14px', fontSize:'11px', fontWeight:600,
-                  color:C.muted, textAlign: i >= 5 ? 'right' : 'left',
-                  letterSpacing:'0.3px', whiteSpace:'nowrap',
-                  borderBottom:C.border, background:C.surface,
-                  position:'sticky', top:0,
+                  padding:'8px 12px', fontSize:'11px', fontWeight:600, color:C.muted,
+                  textAlign:i>=5?'right':'left', letterSpacing:'0.3px', whiteSpace:'nowrap',
+                  borderBottom:C.border, background:C.surface, position:'sticky', top:0,
                 }}>{h}</th>
               ))}
             </tr>
@@ -285,38 +353,34 @@ function DocumentsPage({ selected, onToggle }) {
             {documents.map((doc, i) => {
               const isSel = selected.includes(doc.id);
               return (
-                <tr
-                  key={doc.id}
-                  onClick={() => onToggle(doc.id)}
-                  style={{
-                    background: isSel ? C.accent+'0a' : i % 2 === 0 ? C.bg : '#fafafa',
-                    cursor:'pointer',
-                    borderBottom: i < documents.length - 1 ? C.border : 'none',
-                  }}
-                >
-                  <td style={{ padding:'10px 14px', width:'32px' }}>
+                <tr key={doc.id} onClick={() => onToggle(doc.id)} style={{
+                  background: isSel ? C.accent+'0a' : i%2===0 ? C.bg : '#fafafa',
+                  cursor:'pointer',
+                  borderBottom: i < documents.length-1 ? C.border : 'none',
+                }}>
+                  <td style={{ padding:'9px 12px', width:'32px' }}>
                     <div style={{
                       width:'15px', height:'15px', borderRadius:'4px',
-                      border: isSel ? 'none' : '0.5px solid #c7c7cc',
-                      background: isSel ? C.accent : 'transparent',
+                      border: isSel?'none':'0.5px solid #c7c7cc',
+                      background: isSel?C.accent:'transparent',
                       display:'flex', alignItems:'center', justifyContent:'center',
                     }}>
                       {isSel && <i className="ti ti-check" style={{ fontSize:'10px', color:'#fff' }} />}
                     </div>
                   </td>
-                  <td style={{ padding:'10px 14px', color:C.text, fontWeight:500 }}>{doc.name}</td>
-                  <td style={{ padding:'10px 14px' }}><TypeBadge type={doc.type} /></td>
-                  <td style={{ padding:'10px 14px', color:C.muted }}>{doc.area}</td>
-                  <td style={{ padding:'10px 14px', color:C.muted }}>{doc.date}</td>
-                  <td style={{ padding:'10px 14px', color:C.muted, textAlign:'right' }}>{fmtSize(doc.size)}</td>
-                  <td style={{ padding:'10px 14px', textAlign:'right' }}>
-                    <span style={{ color: doc.weight >= 0.9 ? '#1a7a4a' : doc.weight >= 0.7 ? C.text : C.muted }}>
-                      {(doc.weight * 100).toFixed(0)}%
+                  <td style={{ padding:'9px 12px', color:C.text, fontWeight:500 }}>{doc.name}</td>
+                  <td style={{ padding:'9px 12px' }}><TypeBadge type={doc.type} /></td>
+                  <td style={{ padding:'9px 12px', color:C.muted }}>{doc.area}</td>
+                  <td style={{ padding:'9px 12px', color:C.muted }}>{doc.date}</td>
+                  <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{fmtSize(doc.size)}</td>
+                  <td style={{ padding:'9px 12px', textAlign:'right' }}>
+                    <span style={{ color:doc.weight>=0.9?'#1a7a4a':doc.weight>=0.7?C.text:C.muted }}>
+                      {(doc.weight*100).toFixed(0)}%
                     </span>
                   </td>
-                  <td style={{ padding:'10px 14px', color:C.muted, textAlign:'right' }}>{doc.links}</td>
-                  <td style={{ padding:'10px 14px', color:C.muted, textAlign:'right' }}>{doc.graphs}</td>
-                  <td style={{ padding:'10px 14px', color:C.muted, textAlign:'right' }}>{doc.queries}</td>
+                  <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{doc.links}</td>
+                  <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{doc.graphs}</td>
+                  <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{doc.queries}</td>
                 </tr>
               );
             })}
@@ -327,7 +391,133 @@ function DocumentsPage({ selected, onToggle }) {
   );
 }
 
-// ── Placeholder pages ─────────────────────────────────────────────────────────
+// ── Query page (full-width GPT-style chat) ────────────────────────────────────
+
+function QueryPage({ selected, onRemove, llm, onTrackQuery }) {
+  const [messages, setMessages] = useState([...CHAT_HISTORY]);
+  const [input,    setInput]    = useState('');
+  const bottomRef = useRef(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior:'smooth' });
+  }, [messages]);
+
+  const send = () => {
+    const text = input.trim();
+    if (!text) return;
+    const n = selected.length;
+    const aiText = n > 0
+      ? `Analizando ${n} documento${n!==1?'s':''} en contexto… he encontrado patrones relevantes.`
+      : 'No tengo documentos en contexto. Selecciona documentos desde la página Documents para hacer preguntas específicas sobre tu información.';
+    setMessages(prev => [
+      ...prev,
+      { role:'user', text },
+      { role:'ai', text:aiText, sources: n > 0 ? [...selected] : [] },
+    ]);
+    if (n > 0) onTrackQuery([...selected]);
+    setInput('');
+  };
+
+  const onKeyDown = e => {
+    if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  };
+
+  return (
+    <div style={{
+      flex:1, display:'flex', flexDirection:'column', overflow:'hidden',
+      background:C.bg, fontFamily:C.font,
+    }}>
+      {/* Context band */}
+      <div style={{
+        padding:'8px 20px', borderBottom:C.border, flexShrink:0,
+        display:'flex', alignItems:'center', gap:'8px',
+        overflowX:'auto',
+      }}>
+        <span style={{ fontSize:'11px', color:C.muted, flexShrink:0 }}>Context:</span>
+        {selected.length === 0 && (
+          <span style={{ fontSize:'11px', color:'#c7c7cc', fontStyle:'italic' }}>
+            No documents — go to Documents to add context
+          </span>
+        )}
+        {selected.map(id => {
+          const doc = documents.find(d => d.id === id);
+          if (!doc) return null;
+          return (
+            <div key={id} style={{
+              display:'inline-flex', alignItems:'center', gap:'5px', flexShrink:0,
+              background:C.accent+'12', border:'0.5px solid '+C.accent+'40',
+              borderRadius:'20px', padding:'3px 8px 3px 10px',
+              fontSize:'11px', color:C.accent, fontWeight:500, whiteSpace:'nowrap',
+            }}>
+              <i className={'ti '+(TYPE_ICON[doc.type]||'ti-file')} style={{ fontSize:'11px' }} />
+              {doc.name}
+              <span onClick={() => onRemove(id)}
+                style={{ cursor:'pointer', display:'flex', alignItems:'center', opacity:0.7, marginLeft:'1px' }}>
+                <i className="ti ti-x" style={{ fontSize:'10px' }} />
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Messages */}
+      <div style={{ flex:1, overflow:'auto', padding:'28px 20px 12px' }}>
+        <div style={{ maxWidth:'720px', margin:'0 auto' }}>
+          {messages.map((msg, i) => <MessageBubble key={i} msg={msg} />)}
+          <div ref={bottomRef} />
+        </div>
+      </div>
+
+      {/* Input area */}
+      <div style={{ padding:'12px 20px 20px', flexShrink:0 }}>
+        <div style={{ maxWidth:'720px', margin:'0 auto' }}>
+          <div style={{ position:'relative' }}>
+            <textarea
+              rows={1}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="Ask about these documents…"
+              style={{
+                width:'100%', boxSizing:'border-box',
+                padding:'13px 52px 13px 16px',
+                borderRadius:'14px', border:C.border,
+                fontSize:'14px', lineHeight:'1.5', resize:'none',
+                outline:'none', background:C.bg,
+                color:C.text, fontFamily:C.font,
+              }}
+            />
+            <button
+              onClick={send}
+              disabled={!input.trim()}
+              style={{
+                position:'absolute', right:'10px', bottom:'10px',
+                width:'32px', height:'32px', borderRadius:'50%', border:'none',
+                background: input.trim() ? C.accent : '#d1d1d6',
+                cursor: input.trim() ? 'pointer' : 'default',
+                display:'flex', alignItems:'center', justifyContent:'center',
+                transition:'background 0.15s',
+              }}
+            >
+              <i className="ti ti-arrow-up" style={{ fontSize:'14px', color:'#fff' }} />
+            </button>
+          </div>
+
+          {/* Footer */}
+          <div style={{
+            display:'flex', alignItems:'center', justifyContent:'center', gap:'5px',
+            padding:'8px 0 0', fontSize:'11px', color:C.muted,
+          }}>
+            <i className="ti ti-lock" style={{ fontSize:'12px' }} />
+            {selected.length} doc{selected.length!==1?'s':''} in context · vectors stored on your server
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Placeholder ───────────────────────────────────────────────────────────────
 
 function PlaceholderPage({ title }) {
   return (
@@ -343,17 +533,25 @@ function PlaceholderPage({ title }) {
 // ── App ───────────────────────────────────────────────────────────────────────
 
 function App() {
-  const [selected, setSelected] = useState([]);
-  const [page,     setPage]     = useState('documents');
+  const [selected,    setSelected]    = useState([]);
+  const [page,        setPage]        = useState('chat');
+  const [llm,         setLlm]         = useState('claude');
+  const [queryStats,  setQueryStats]  = useState({});
 
-  const toggle = id =>
-    setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const toggle   = id => setSelected(prev =>
+    prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+  );
+  const clearAll = () => setSelected([]);
 
-  const pageMap = {
-    documents: <DocumentsPage selected={selected} onToggle={toggle} />,
-    graphs:    <PlaceholderPage title="Graphs" />,
-    query:     <PlaceholderPage title="Query" />,
-    policies:  <PlaceholderPage title="Policies" />,
+  const trackQuery = (docIds) => {
+    const now = new Date().toISOString();
+    setQueryStats(prev => {
+      const next = { ...prev };
+      docIds.forEach(id => {
+        next[id] = { count: (prev[id]?.count || 0) + 1, lastAt: now };
+      });
+      return next;
+    });
   };
 
   return (
@@ -362,10 +560,25 @@ function App() {
       fontFamily:C.font, background:C.bg, color:C.text,
     }}>
       <Sidebar page={page} onNav={setPage} selected={selected} onToggle={toggle} />
+
       <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-        <Topbar selected={selected} onRemove={toggle} />
-        <div style={{ flex:1, overflow:'auto', display:'flex', flexDirection:'column' }}>
-          {pageMap[page]}
+        <Topbar
+          selected={selected} onRemove={toggle}
+          onClearAll={clearAll}
+          llm={llm} onLlmChange={setLlm}
+        />
+        <div style={{ flex:1, display:'flex', overflow:'hidden' }}>
+          {page === 'documents' && (
+            <DocumentsPage selected={selected} onToggle={toggle} />
+          )}
+          {page === 'chat' && (
+            <QueryPage
+              selected={selected} onRemove={toggle}
+              llm={llm} onTrackQuery={trackQuery}
+            />
+          )}
+          {page === 'graphs'   && <PlaceholderPage title="Graphs" />}
+          {page === 'policies' && <PlaceholderPage title="Policies" />}
         </div>
       </div>
     </div>

@@ -84,3 +84,10 @@ export const documents = [
     date: "2026-01-02"
   }
 ];
+
+export const CHAT_HISTORY = [
+  { role:'user', text:'¿Hay relación entre los gastos de IT y las caídas en ventas del Q1?' },
+  { role:'ai',   text:'Sí, encontré una correlación importante. En febrero los costos de IT subieron 38%, coincidiendo con una caída del 22% en ventas ese mismo mes.', insight:'El pico de gasto en IT precede en 5 días la caída de ventas — posible downtime durante cierre de órdenes.', sources:['doc-001','doc-002'] },
+  { role:'user', text:'¿Qué mes tuvo mejor ratio ventas vs costo IT?' },
+  { role:'ai',   text:'Enero fue el más eficiente — $8.40 en ventas por cada $1 de IT. Marzo mejoró vs febrero pero no recuperó enero.', sources:['doc-001','doc-002'] },
+];
