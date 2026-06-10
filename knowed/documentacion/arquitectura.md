@@ -68,11 +68,13 @@ page === 'policies'  → <PlaceholderPage />
 
 ## Vista Graphs — renderer 3D
 
-- Canvas HTML5 puro, sin librerías WebGL
-- Layout: distribución Fibonacci Sphere de 7 nodos en radio 160px
-- Transformación: matrices `rotX`, `rotY` + proyección perspectiva (focal length 480)
-- Renderizado: `requestAnimationFrame` loop continuo a 60fps
-- Auto-rotación eje Y cuando no hay drag activo
-- DPR awareness: `canvas.width = rect.width * devicePixelRatio`
-- Aristas: co-ocurrencia de documentos en `sources` de mensajes AI
-- Interacción: mousedown → drag rota globo / click (sin drag) → toggle selección
+- Librería: **3d-force-graph** (Three.js bundled) via CDN
+- CDN: `https://unpkg.com/3d-force-graph/dist/3d-force-graph.min.js`
+- Global UMD: `ForceGraph3D`
+- Layout: simulación de fuerzas (repulsión + atracción por links) — se acomoda automáticamente
+- Rendering: WebGL via Three.js con `OrbitControls` integrado
+- Links: partículas animadas fluyendo sobre las aristas
+- Tooltip: HTML personalizado por nodo (name, area, weight, links, queries)
+- Click en nodo → deselecciona el documento (`toggleRef.current`)
+- Fondo oscuro `#0d1117` para contraste visual
+- Init una vez en `useEffect([], [])`, datos actualizados en `useEffect([selected])`
