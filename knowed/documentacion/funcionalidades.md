@@ -2,11 +2,24 @@
 
 ## Sidebar
 
-- Lista de documentos con secciones **This month** / **Older**
-- Búsqueda por nombre en tiempo real
-- Checkboxes de selección por documento (estado persiste entre páginas)
+El sidebar tiene tres zonas verticales:
+
+1. **Nav** — 5 ítems de navegación (Documents, Visualizar, Graphs, Chat, Policies)
+2. **This month** — documentos cuya `date` pertenece al mes actual; cada ítem es un `DocItem` toggleable
+3. **Older** — historial de sesiones de chat pasadas (`CHAT_SESSIONS`); los documentos de cada sesión siempre están disponibles para añadir al contexto activo
+
+### Older — historial de chats
+
+Cada `ChatSessionItem` muestra:
+- Icono `ti-message-circle` + preview truncado de la pregunta principal
+- Pills por cada doc referenciado en esa sesión (click = toggle en contexto global)
+- Fecha de la sesión alineada a la derecha
+
+**Ventaja de diseño:** los documentos de conversaciones históricas nunca desaparecen del sidebar; siempre se pueden rescatar al contexto activo sin navegar a Documents.
+
+- Búsqueda por nombre en tiempo real (filtra docs en "This month")
 - Botón Upload (UI, sin backend)
-- Navegación entre vistas (Documents, Graphs, Chat, Policies)
+- Estado de selección persiste entre páginas
 
 ## Topbar
 
@@ -22,10 +35,58 @@
 
 ## Vista Documents (`/documents`)
 
-- Tabla con columnas: Name, Type, Area, Date, Size, Weight, Links, Graphs, Queries
-- Filas alternadas, click en fila toggle selección
-- TypeBadge coloreado por tipo: xlsx verde, pdf rojo, csv azul
-- Weight: color verde si ≥90%, neutro si ≥70%, gris si <70%
+### Organización de documentos
+
+Los documentos se organizan en 4 niveles:
+
+```
+Empresa → Departamento → Grupo → Documento
+```
+
+La vista navega entre niveles con breadcrumb:
+- **Vista `all`** — grid de departamentos (3 columnas), cada card muestra conteo de docs y grupos
+- **Vista `dept`** — carpetas de grupos + docs sueltos (sin grupo asignado)
+- **Vista `group`** — tabla de documentos del grupo
+- **Vista `flat`** — tabla plana de todos los docs con columna Location (`Dept › Grupo`)
+
+### Modos de vista de documentos
+
+El toolbar incluye dos botones (grid / list) que alternan `viewMode`:
+
+| Modo | Descripción |
+|------|-------------|
+| **Grid** (`ti-layout-grid`) | Tarjetas 3 columnas: icono tipo, nombre, área · tamaño, fecha, barra de peso. Checkbox de selección en esquina superior derecha. |
+| **List** (`ti-list`) | Tabla con columnas: checkbox, Name, Type, [Location], Date, Size, Weight, Links, Graphs, Queries. |
+
+La vista `flat` (All documents) respeta el modo seleccionado y añade columna Location en modo lista o la muestra dentro de la tarjeta en modo grid.
+
+### Drag & drop
+
+- **Documentos** son arrastrables a cualquier carpeta (grupo o departamento) en ambos modos de vista
+- **Grupos** son arrastrables entre departamentos (no pueden anidarse)
+- Drop target activo: borde azul + fondo azul claro
+- Los cambios son en memoria (se pierden al recargar)
+
+### Menú contextual (click derecho)
+
+| Target | Vista | Opciones |
+|--------|-------|----------|
+| Documento | cualquiera | Move to folder, Copy, Add to context, Details, Delete |
+| Carpeta | cualquiera | Rename, Move inside folder, Delete |
+| Espacio en blanco | `all` (raíz) | New folder, New department, Upload document |
+| Espacio en blanco | `dept` / `group` / `flat` | New folder, Upload document |
+
+**Regla:** "New department" solo aparece en la vista raíz (`all`). Dentro de un departamento o grupo la opción queda oculta — no tiene sentido crear un departamento estando navegando dentro de uno.
+
+Cierre: Escape, click fuera del menú, o seleccionar una opción.  
+**Acción funcional:** "New folder" en vista `dept` crea un grupo nuevo en el departamento activo.
+
+### Multi-empresa
+
+- Selector de empresa en la barra superior (encima del breadcrumb)
+- Botón `+ New company` abre modal de creación (input + Enter / botón Crear)
+- Cada empresa tiene su propio árbol de carpetas
+- Empresa Demo (`c1`) tiene datos precargados; el resto arrancan vacíos
 
 ## Vista Graphs (`/graphs`)
 
@@ -77,18 +138,26 @@ Se abre al hacer click en cualquier nodo del grafo.
 
 ## Vista Visualizar (`/visualize`)
 
+> **Regla fundamental:** el panel izquierdo muestra **únicamente los documentos marcados** (seleccionados) en el sidebar global. No aparecen documentos que no estén en el contexto activo. Si un documento es quitado del contexto, desaparece del panel y la vista derecha se limpia automáticamente.
+
 Layout dos paneles:
 
 ```
 [Panel izquierdo 268px] │ [Panel derecho flex:1]
   Search input           │   DocPreview centrado
-  Lista de documentos    │   (fondo C.surface)
+  Lista de docs marcados │   (fondo C.surface)
   Footer con conteo      │
 ```
 
+### Estado vacío (sin docs seleccionados)
+
+Si `selected.length === 0`: icono `ti-eye` + "Marca documentos en el sidebar para visualizarlos".  
+No se muestra el layout de dos paneles.
+
 ### Panel izquierdo
 
-- Search en tiempo real por nombre
+- Muestra solo los documentos que están en `selected` (marcados en el sidebar)
+- Search en tiempo real por nombre (filtra dentro de los seleccionados)
 - Cada ítem: icono tipo + nombre + area · size + TypeBadge
 - Ítem activo resaltado en azul
 - Footer con conteo de documentos filtrados
@@ -106,6 +175,8 @@ Renderiza un card centrado (`max-width: 700px`) con:
 | Stats chips | Links, Graphs, Queries |
 | Content | SpreadsheetView (xlsx/csv) o PdfView (pdf) |
 
+Si "Remove context" es clickeado, el doc desaparece del panel izquierdo y el visor vuelve al estado vacío ("Selecciona un documento para visualizarlo").
+
 ### SpreadsheetView
 
 Tabla HTML con cabecera de columnas específicas por documento (`DOC_COLS`) y 9 filas de celdas placeholder (bloques grises de ancho variable).
@@ -114,10 +185,45 @@ Tabla HTML con cabecera de columnas específicas por documento (`DOC_COLS`) y 9 
 
 Secciones con título textual (`DOC_SECTIONS`) y filas de bloques grises simulando párrafos.
 
-### Estado vacío
-
-Si no hay documento seleccionado: icono `ti-eye` + "Selecciona un documento para visualizarlo".
-
 ## Vista Policies (`/policies`)
 
-- Placeholder — pendiente
+Gestión de acceso por documento. Define qué roles pueden usar qué documentos en el LLM.
+
+Layout dos paneles:
+
+```
+[Panel izquierdo 320px] │ [Panel derecho flex:1]
+  Header + "New policy"  │   Detalle de política seleccionada
+  Lista de policy cards  │   (fondo C.surface)
+```
+
+### Panel izquierdo — lista de políticas
+
+Cada card muestra:
+- Nombre + badge de estado (`Active` verde / `Draft` gris)
+- Pills de documentos incluidos (con icono de tipo)
+- Pills de roles con acceso (con icono `ti-user`)
+
+### Panel derecho — detalle de política
+
+| Sección | Contenido |
+|---------|-----------|
+| Header | Nombre, badge de estado, fecha de creación, botón "Edit policy" |
+| Nota de seguridad | Aviso amarillo explicando que el LLM solo ve vectores permitidos |
+| Documents in policy | Cards por cada doc con icono tipo, nombre y área |
+| Access roles | Pills azules con icono `ti-user` por cada rol |
+| Access level | 3 opciones seleccionables: Full module, Document only, Temporary (24h) |
+
+### Niveles de acceso
+
+| Nivel | Descripción |
+|-------|-------------|
+| Full module | Acceso completo a todos los vectores del documento |
+| Document only | Solo el documento, sin metadatos ni relaciones |
+| Temporary (24h) | Acceso expira automáticamente en 24 horas |
+
+### Filosofía de seguridad
+
+> "El LLM solo accede a vectores de los documentos permitidos por esta política. El control se aplica en la capa de datos, no en el modelo."
+
+El acceso no se controla diciéndole al LLM qué puede o no puede decir — se controla qué datos llegan al LLM. Si un documento no está en la política activa del usuario, sus vectores nunca entran en el contexto de inferencia.

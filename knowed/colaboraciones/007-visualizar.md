@@ -31,8 +31,10 @@ Permite explorar el contenido simulado de cada documento de forma individual.
 Props: `{ selected, onToggle }` — usa el mismo estado global de selección del App.
 
 Estado local:
-- `search: string` — filtro por nombre
+- `search: string` — filtro por nombre (dentro de los seleccionados)
 - `viewId: string | null` — ID del documento actualmente visualizado
+
+**Regla de visibilidad:** solo los documentos cuyo `id` esté en `selected` aparecen en el panel izquierdo. Si `selected` está vacío, se muestra un estado vacío en lugar del layout de dos paneles. Si un documento visualizado es quitado del contexto, `viewDoc` se vuelve `null` automáticamente (derivado de `selDocs.find(...)`) y la vista derecha muestra el estado vacío.
 
 ### `DocPreview`
 

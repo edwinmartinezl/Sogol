@@ -11,6 +11,21 @@
 | Servidor dev | `npx serve` (Node.js) |
 | Build | Ninguno — carga directa en browser |
 
+## Design tokens (`C`)
+
+Paleta inspirada en el hardware Meris LVX — tonos cálidos off-white con acento naranja.
+
+| Token | Valor | Uso |
+|-------|-------|-----|
+| `bg` | `#f4f3f1` | Fondo principal (warm off-white) |
+| `surface` | `#eae8e5` | Sidebar, headers, superficies secundarias |
+| `border` | `0.5px solid #c4c0b8` | Separadores y bordes de cards |
+| `text` | `#28261f` | Texto principal (carbón cálido) |
+| `muted` | `#8a8780` | Texto secundario y placeholders |
+| `accent` | `#e8561c` | Color de acento (naranja LED) |
+
+El acento naranja sustituye al azul Apple en: botones primarios, pills de selección, estados activos en nav, barras de progreso y badges.
+
 ## Sin paso de compilación
 
 El proyecto corre como SPA sin bundler. El browser descarga:
@@ -61,20 +76,105 @@ Estado `page` en `App`. Sin react-router-dom ni URLs. Cada valor de `page` rende
 
 ```
 page === 'documents' → <DocumentsPage />
+page === 'visualize' → <VisualizePage />
 page === 'graphs'    → <GraphsPage />
 page === 'chat'      → <ChatPage />
-page === 'policies'  → <PlaceholderPage />
+page === 'policies'  → <PoliciesPage />
 ```
 
-## Vista Graphs — renderer 3D
+## Jerarquía de organización (Documents)
 
-- Librería: **3d-force-graph** (Three.js bundled) via CDN
-- CDN: `https://unpkg.com/3d-force-graph/dist/3d-force-graph.min.js`
-- Global UMD: `ForceGraph3D`
-- Layout: simulación de fuerzas (repulsión + atracción por links) — se acomoda automáticamente
-- Rendering: WebGL via Three.js con `OrbitControls` integrado
-- Links: partículas animadas fluyendo sobre las aristas
-- Tooltip: HTML personalizado por nodo (name, area, weight, links, queries)
-- Click en nodo → deselecciona el documento (`toggleRef.current`)
-- Fondo oscuro `#0d1117` para contraste visual
-- Init una vez en `useEffect([], [])`, datos actualizados en `useEffect([selected])`
+Los documentos se organizan en 4 niveles navegables:
+
+```
+Empresa (company)
+└── Departamento (department)   — Finanzas, IT, Ventas, RRHH, Operaciones
+    └── Grupo (group)           — Cierres Q1, Pipeline Ventas, …
+        └── Documento           — ventas_Q1.xlsx, reporte.pdf, …
+```
+
+La estructura se define en la constante `TREE` (módulo `app.js`):
+
+```js
+TREE.company          → { id, name }
+TREE.departments[]    → { id, name, icon }
+TREE.groups[]         → { id, name, deptId }
+TREE.docAssignments   → { [docId]: { deptId, groupId } }
+```
+
+`docAssignments` es la fuente de verdad inmutable. `DocumentsPage` mantiene una copia mutable en el estado local (`assign`) que se actualiza con drag & drop sin persistencia.
+
+### Vistas internas de `DocumentsPage`
+
+| `nav.view` | Contenido |
+|------------|-----------|
+| `'all'` | Grid de cards de departamentos |
+| `'dept'` | Carpetas de grupos + docs sueltos del departamento |
+| `'group'` | Tabla de documentos del grupo |
+| `'flat'` | Tabla plana de todos los docs con columna Location |
+
+## Vista Graphs — renderer 2D (D3.js)
+
+- Librería: **D3.js v7** via CDN (`https://d3js.org/d3.v7.min.js`, global `d3`)
+- Rendering: SVG — nodos como `<circle>`, aristas como `<line>`, labels como `<text>`
+- Simulación: `d3.forceSimulation` con `forceLink`, `forceManyBody`, `forceCenter`, `forceCollide`
+- Zoom/pan: `d3.zoom()` aplicado al SVG container
+- Drag: `d3.drag()` con `alphaTarget` para "calentar" la simulación
+- Click en nodo → abre `DocModal` con detalle del documento
+- Hover → tooltip ligero (nombre + "Click para ver detalles")
+- Fondo blanco `C.bg` — líneas grises `#d1d1d6` sobre superficie limpia
+- Solo se construye con ≥ 3 docs seleccionados; estado vacío si hay menos
+- Re-init completo en `useEffect([selected])` con cleanup: `sim.stop()` + zoom off
+
+## Seguridad — modelo basado en datos
+
+El control de acceso en KnowLayer se aplica **en la capa de datos**, no en el LLM.
+
+```
+Usuario con rol X
+    │
+    ▼
+Consulta al sistema
+    │
+    ├─ Política activa → filtra IDs de documentos permitidos
+    │
+    ▼
+DB vectorial (namespace por área/policy)
+    │  Solo se recuperan vectores de docs permitidos
+    ▼
+Contexto LLM  ← nunca recibe vectores de docs fuera de política
+    │
+    ▼
+Respuesta
+```
+
+### Principios
+
+| Principio | Implementación |
+|-----------|----------------|
+| Acceso por rol | Cada política define roles → conjunto de docs |
+| Namespaces vectoriales | Cada área/policy tiene su propio namespace en la DB vectorial |
+| Zero leakage | El LLM no puede acceder a lo que no está en su contexto de inferencia |
+| No depende del LLM | No se instruye al modelo qué puede decir — se controla qué datos recibe |
+
+### Niveles de acceso
+
+| Nivel | Qué entrega a la DB vectorial |
+|-------|-------------------------------|
+| Full module | Todos los chunks del documento |
+| Document only | Solo chunks del documento, sin metadatos de relaciones |
+| Temporary (24h) | Token de acceso con TTL; la DB rechaza queries vencidas |
+
+### Relación entre DBs
+
+```
+DB Relacional (PostgreSQL)
+  └── documents, policies, roles, access_grants
+        │
+        ▼ filtro de IDs permitidos
+DB Vectorial (Pinecone / pgvector)
+  └── namespaces: [area-comercial, area-finanzas, area-legal, ...]
+        │
+        ▼ solo vectores autorizados
+LLM context window
+```

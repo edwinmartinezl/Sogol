@@ -23,6 +23,18 @@ const CHAT_HISTORY = [
   { role:'ai',   text:'La base de clientes creció un 12% respecto al año anterior, lo que correlaciona con el pico de ventas de enero. Los segmentos con mayor retención generaron el 68% del ingreso Q1.', sources:['doc-001','doc-003'] },
   { role:'user', text:'¿El informe financiero menciona el crecimiento de clientes?' },
   { role:'ai',   text:'Sí, la sección de ingresos cita un aumento del 15% en clientes activos como principal driver del resultado anual.', sources:['doc-002','doc-003'] },
+  { role:'user', text:'¿Qué dice el reporte de auditoría sobre el inventario del almacén?' },
+  { role:'ai',   text:'El reporte identificó un 3% de discrepancia en el inventario Q4. Se recomienda revisar los procesos de entrada de mercancía y cruzar con los registros de operaciones.', sources:['doc-004','doc-005'] },
+  { role:'user', text:'¿El plan estratégico considera los hallazgos de la auditoría?' },
+  { role:'ai',   text:'Sí, la sección de riesgos del plan 2026 cita explícitamente los hallazgos de auditoría como input para las iniciativas de mejora operacional del próximo año.', sources:['doc-005','doc-007'] },
+  { role:'user', text:'¿Las métricas de soporte están alineadas con los objetivos del plan estratégico?' },
+  { role:'ai',   text:'Parcialmente. El plan proyecta reducir el tiempo de resolución un 20%, pero las métricas actuales de soporte muestran una mejora de solo 8% — brecha significativa a cerrar en H2.', sources:['doc-006','doc-007'] },
+  { role:'user', text:'¿Cómo afectan las roturas de stock a los resultados de ventas?' },
+  { role:'ai',   text:'El análisis cruzado muestra que las roturas de stock en almacén explican el 15% de las oportunidades de venta perdidas en Q1.', sources:['doc-001','doc-004'] },
+  { role:'user', text:'¿El inventario está alineado con la estrategia de crecimiento?' },
+  { role:'ai',   text:'No completamente. El plan estratégico proyecta un crecimiento del 25% en volumen, pero la capacidad actual del almacén solo soporta un 18% adicional sin inversión.', sources:['doc-004','doc-007'] },
+  { role:'user', text:'¿Qué relación hay entre el soporte y los clientes activos?' },
+  { role:'ai',   text:'Los clientes con mayor índice de tickets de soporte tienen una tasa de retención 12% menor. Mejorar el soporte es clave para sostener el crecimiento de la base de clientes.', sources:['doc-003','doc-006'] },
 ];
 
 const LLM_LABELS = { claude:'Claude 3.5', gpt4o:'GPT-4o', gemini:'Gemini', llama:'Llama' };
@@ -39,12 +51,12 @@ const isThisMonth = dateStr => {
 // ── Design tokens ─────────────────────────────────────────────────────────────
 
 const C = {
-  bg:      '#ffffff',
-  surface: '#f5f5f7',
-  border:  '0.5px solid #e0e0e5',
-  text:    '#1d1d1f',
-  muted:   '#86868b',
-  accent:  '#0071e3',
+  bg:      '#f4f3f1',
+  surface: '#eae8e5',
+  border:  '0.5px solid #c4c0b8',
+  text:    '#28261f',
+  muted:   '#8a8780',
+  accent:  '#e8561c',
   font:    "-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif",
 };
 
@@ -133,6 +145,35 @@ function MessageBubble({ msg }) {
   );
 }
 
+// ── Chat sessions (historial) ─────────────────────────────────────────────────
+
+const CHAT_SESSIONS = [
+  {
+    id: 'cs-001',
+    date: '2026-06-05',
+    preview: '¿Hay relación entre los gastos de IT y las caídas en ventas del Q1?',
+    docs: ['doc-001', 'doc-002'],
+  },
+  {
+    id: 'cs-002',
+    date: '2026-05-20',
+    preview: '¿Cómo se compara la base de clientes 2025 con las ventas del Q1?',
+    docs: ['doc-001', 'doc-003'],
+  },
+  {
+    id: 'cs-003',
+    date: '2026-04-14',
+    preview: '¿Qué riesgos identifica el reporte de auditoría para este año?',
+    docs: ['doc-005', 'doc-007'],
+  },
+  {
+    id: 'cs-004',
+    date: '2026-03-02',
+    preview: '¿Cuáles son los KPIs de soporte más críticos según métricas?',
+    docs: ['doc-006', 'doc-002'],
+  },
+];
+
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 
 const NAV = [
@@ -178,11 +219,63 @@ function DocItem({ doc, selected, onToggle }) {
   );
 }
 
+function ChatSessionItem({ session, selected, onToggle }) {
+  const sessionDocs = session.docs.map(id => documents.find(d => d.id === id)).filter(Boolean);
+  const allSelected = session.docs.every(id => selected.includes(id));
+  const fmt = d => new Date(d).toLocaleDateString('es-ES', { day:'2-digit', month:'short' });
+
+  return (
+    <div style={{
+      margin:'1px 6px', padding:'8px 10px', borderRadius:'6px',
+      border: allSelected ? '0.5px solid '+C.accent+'35' : '0.5px solid transparent',
+      background: allSelected ? C.accent+'08' : 'transparent',
+    }}>
+      <div style={{ display:'flex', alignItems:'center', gap:'6px', marginBottom:'5px' }}>
+        <i className="ti ti-message-circle" style={{ fontSize:'12px', color:C.muted, flexShrink:0 }} />
+        <span style={{
+          fontSize:'11px', color:C.text, flex:1,
+          overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+        }}>{session.preview}</span>
+      </div>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+        <div style={{ display:'flex', gap:'4px', flexWrap:'wrap' }}>
+          {sessionDocs.map(doc => {
+            const isSel = selected.includes(doc.id);
+            return (
+              <div
+                key={doc.id}
+                onClick={() => onToggle(doc.id)}
+                title={doc.name}
+                style={{
+                  display:'inline-flex', alignItems:'center', gap:'3px',
+                  padding:'2px 6px', borderRadius:'10px', cursor:'pointer',
+                  fontSize:'10px', fontWeight:500,
+                  color:      isSel ? C.accent    : C.muted,
+                  background: isSel ? C.accent+'14' : C.surface,
+                  border:     isSel ? '0.5px solid '+C.accent+'40' : C.border,
+                }}
+              >
+                <i className={'ti '+(TYPE_ICON[doc.type]||'ti-file')}
+                   style={{ fontSize:'10px', color: TYPE_COLOR[doc.type] }} />
+                {doc.name.length > 14 ? doc.name.slice(0,13)+'…' : doc.name}
+              </div>
+            );
+          })}
+        </div>
+        <span style={{ fontSize:'10px', color:C.muted, flexShrink:0, marginLeft:'6px' }}>
+          {fmt(session.date)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function Sidebar({ page, onNav, selected, onToggle }) {
   const [search, setSearch] = useState('');
-  const filtered  = documents.filter(d => d.name.toLowerCase().includes(search.toLowerCase()));
-  const thisMonth = filtered.filter(d => isThisMonth(d.date));
-  const older     = filtered.filter(d => !isThisMonth(d.date));
+  const thisMonth       = documents.filter(d => isThisMonth(d.date));
+  const filteredSessions = CHAT_SESSIONS.filter(s =>
+    s.preview.toLowerCase().includes(search.toLowerCase())
+  );
 
   return (
     <div style={{
@@ -201,24 +294,6 @@ function Sidebar({ page, onNav, selected, onToggle }) {
           <span style={{ fontWeight:600, fontSize:'14px', color:C.text, letterSpacing:'-0.2px' }}>
             KnowLayer
           </span>
-        </div>
-      </div>
-
-      <div style={{ padding:'8px 10px', borderBottom:C.border, flexShrink:0 }}>
-        <div style={{ position:'relative' }}>
-          <i className="ti ti-search" style={{
-            position:'absolute', left:'8px', top:'50%', transform:'translateY(-50%)',
-            fontSize:'13px', color:C.muted, pointerEvents:'none',
-          }} />
-          <input type="text" placeholder="Search docs…" value={search}
-            onChange={e => setSearch(e.target.value)}
-            style={{
-              width:'100%', boxSizing:'border-box',
-              padding:'5px 8px 5px 28px', fontSize:'12px',
-              background:C.bg, border:C.border, borderRadius:'7px',
-              color:C.text, outline:'none', fontFamily:C.font,
-            }}
-          />
         </div>
       </div>
 
@@ -250,22 +325,33 @@ function Sidebar({ page, onNav, selected, onToggle }) {
             ))}
           </>
         )}
-        {older.length > 0 && (
-          <>
-            <div style={{
-              fontSize:'10px', fontWeight:600, color:C.muted,
-              textTransform:'uppercase', letterSpacing:'0.8px', padding:'10px 20px 3px',
-            }}>Older</div>
-            {older.map(doc => (
-              <DocItem key={doc.id} doc={doc} selected={selected} onToggle={onToggle} />
-            ))}
-          </>
-        )}
-        {filtered.length === 0 && (
-          <div style={{ textAlign:'center', padding:'24px 16px', color:C.muted, fontSize:'12px' }}>
-            No results
+        <>
+          <div style={{
+            fontSize:'10px', fontWeight:600, color:C.muted,
+            textTransform:'uppercase', letterSpacing:'0.8px', padding:'10px 20px 3px',
+          }}>Older</div>
+          <div style={{ padding:'4px 10px 6px', position:'relative' }}>
+            <i className="ti ti-search" style={{
+              position:'absolute', left:'18px', top:'50%', transform:'translateY(-50%)',
+              fontSize:'12px', color:C.muted, pointerEvents:'none',
+            }} />
+            <input type="text" placeholder="Search chats…" value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{
+                width:'100%', boxSizing:'border-box',
+                padding:'4px 8px 4px 26px', fontSize:'11px',
+                background:C.bg, border:C.border, borderRadius:'6px',
+                color:C.text, outline:'none', fontFamily:C.font,
+              }}
+            />
           </div>
-        )}
+          {filteredSessions.length > 0
+            ? filteredSessions.map(session => (
+                <ChatSessionItem key={session.id} session={session} selected={selected} onToggle={onToggle} />
+              ))
+            : <div style={{ textAlign:'center', padding:'16px', color:C.muted, fontSize:'12px' }}>No chats found</div>
+          }
+        </>
       </div>
 
       <div style={{ padding:'10px', borderTop:C.border, flexShrink:0 }}>
@@ -284,7 +370,7 @@ function Sidebar({ page, onNav, selected, onToggle }) {
 
 // ── Topbar ────────────────────────────────────────────────────────────────────
 
-function Topbar({ selected, onRemove, onClearAll, llm, onLlmChange }) {
+function Topbar({ selected, onRemove, onClearAll, llm, onLlmChange, page, companies, activeCo, onSwitchCo, onNewCo }) {
   const n       = selected.length;
   const selDocs = documents.filter(d => selected.includes(d.id));
   const badge   = n === 0 ? null
@@ -297,27 +383,27 @@ function Topbar({ selected, onRemove, onClearAll, llm, onLlmChange }) {
       height:'48px', flexShrink:0, background:C.bg, borderBottom:C.border,
       display:'flex', alignItems:'center', padding:'0 16px', gap:'8px', fontFamily:C.font,
     }}>
-      <div style={{ flex:1, display:'flex', alignItems:'center', gap:'6px', overflow:'hidden', minWidth:0 }}>
-        {n === 0
-          ? <span style={{ fontSize:'12px', color:C.muted }}>
-              Select documents from the sidebar to cross-reference
-            </span>
-          : selDocs.map(doc => (
-            <div key={doc.id} style={{
-              display:'inline-flex', alignItems:'center', gap:'5px', flexShrink:0,
-              background:C.accent+'12', border:'0.5px solid '+C.accent+'40',
-              borderRadius:'20px', padding:'3px 8px 3px 10px',
-              fontSize:'11px', color:C.accent, fontWeight:500, whiteSpace:'nowrap',
-            }}>
-              {doc.name}
-              <span onClick={() => onRemove(doc.id)}
-                style={{ cursor:'pointer', display:'flex', alignItems:'center', opacity:0.7 }}>
-                <i className="ti ti-x" style={{ fontSize:'10px' }} />
-              </span>
-            </div>
-          ))
-        }
-      </div>
+      {page === 'documents' && (
+        <div style={{ display:'flex', alignItems:'center', gap:'6px', marginRight:'4px' }}>
+          <i className="ti ti-building" style={{ fontSize:'13px', color:C.muted }} />
+          <select value={activeCo} onChange={e => onSwitchCo(e.target.value)} style={{
+            fontSize:'12px', padding:'3px 8px', border:C.border, borderRadius:'6px',
+            background:C.surface, color:C.text, outline:'none', cursor:'pointer', fontFamily:C.font,
+          }}>
+            {(companies||[]).map(co => <option key={co.id} value={co.id}>{co.name}</option>)}
+          </select>
+          <button onClick={onNewCo} style={{
+            display:'flex', alignItems:'center', gap:'4px', padding:'3px 10px',
+            fontSize:'11px', fontWeight:500, color:C.accent,
+            background:C.accent+'12', border:'0.5px solid '+C.accent+'35',
+            borderRadius:'6px', cursor:'pointer', fontFamily:C.font,
+          }}>
+            <i className="ti ti-plus" style={{ fontSize:'11px' }} /> New company
+          </button>
+          <div style={{ width:'0.5px', height:'18px', background:'#e0e0e5', margin:'0 4px' }} />
+        </div>
+      )}
+      <div style={{ flex:1 }} />
 
       {n >= 2 && (
         <button onClick={onClearAll} style={{
@@ -339,91 +425,545 @@ function Topbar({ selected, onRemove, onClearAll, llm, onLlmChange }) {
         </div>
       )}
 
-      <select value={llm} onChange={e => onLlmChange(e.target.value)} style={{
-        flexShrink:0, fontSize:'12px', padding:'5px 10px',
-        border:C.border, borderRadius:'7px',
-        background:C.surface, color:C.text,
-        outline:'none', cursor:'pointer', fontFamily:C.font,
-      }}>
-        <option value="claude">Claude 3.5</option>
-        <option value="gpt4o">GPT-4o</option>
-        <option value="gemini">Gemini</option>
-        <option value="llama">Llama</option>
-      </select>
+      {page !== 'chat' && (
+        <select value={llm} onChange={e => onLlmChange(e.target.value)} style={{
+          flexShrink:0, fontSize:'12px', padding:'5px 10px',
+          border:C.border, borderRadius:'7px',
+          background:C.surface, color:C.text,
+          outline:'none', cursor:'pointer', fontFamily:C.font,
+        }}>
+          <option value="claude">Claude 3.5</option>
+          <option value="gpt4o">GPT-4o</option>
+          <option value="gemini">Gemini</option>
+          <option value="llama">Llama</option>
+        </select>
+      )}
+    </div>
+  );
+}
+
+// ── Tree structure ────────────────────────────────────────────────────────────
+
+const TREE = {
+  company: { id:'c1', name:'Empresa Demo' },
+  departments: [
+    { id:'dep1', name:'Finanzas',    icon:'ti-building-bank' },
+    { id:'dep2', name:'IT',          icon:'ti-cpu'           },
+    { id:'dep3', name:'Ventas',      icon:'ti-chart-bar'     },
+    { id:'dep4', name:'RRHH',        icon:'ti-users'         },
+    { id:'dep5', name:'Operaciones', icon:'ti-settings'      },
+  ],
+  groups: [
+    { id:'g1', name:'Cierres Q1',       deptId:'dep1' },
+    { id:'g2', name:'Presupuesto 2024', deptId:'dep1' },
+    { id:'g3', name:'Infraestructura',  deptId:'dep2' },
+    { id:'g4', name:'Pipeline Ventas',  deptId:'dep3' },
+    { id:'g5', name:'Nómina 2023',      deptId:'dep4' },
+  ],
+  docAssignments: {
+    'doc-001': { deptId:'dep3', groupId:'g4'  },
+    'doc-002': { deptId:'dep2', groupId:'g3'  },
+    'doc-003': { deptId:'dep1', groupId:'g1'  },
+    'doc-004': { deptId:'dep4', groupId:'g5'  },
+    'doc-005': { deptId:'dep3', groupId:'g4'  },
+    'doc-006': { deptId:'dep1', groupId:'g2'  },
+    'doc-007': { deptId:'dep5', groupId:null  },
+  },
+};
+
+// ── Context menu ─────────────────────────────────────────────────────────────
+
+const CTX_ITEMS = {
+  doc: [
+    { icon:'ti-folder',          label:'Move to folder',    action:'move'       },
+    { icon:'ti-copy',            label:'Copy',              action:'copy'       },
+    { icon:'ti-link',            label:'Add to context',    action:'context'    },
+    { icon:'ti-info-circle',     label:'Details',           action:'details'    },
+    { sep:true },
+    { icon:'ti-trash',           label:'Delete',            action:'delete', danger:true },
+  ],
+  folder: [
+    { icon:'ti-pencil',          label:'Rename',            action:'rename'     },
+    { icon:'ti-folder-symlink',  label:'Move inside folder',action:'movefolder' },
+    { sep:true },
+    { icon:'ti-trash',           label:'Delete',            action:'delete', danger:true },
+  ],
+  blank: [
+    { icon:'ti-folder-plus',     label:'New folder',        action:'newfolder'  },
+    { icon:'ti-building',        label:'New department',    action:'newdept'    },
+    { icon:'ti-upload',          label:'Upload document',   action:'upload'     },
+  ],
+  blank_inner: [
+    { icon:'ti-folder-plus',     label:'New folder',        action:'newfolder'  },
+    { icon:'ti-upload',          label:'Upload document',   action:'upload'     },
+  ],
+};
+
+function ContextMenu({ menu, onClose, onAction }) {
+  if (!menu.visible) return null;
+  const items   = CTX_ITEMS[menu.type] || [];
+  const flipX   = menu.x + 196 > window.innerWidth;
+  const flipY   = menu.y + items.length * 32 + 24 > window.innerHeight;
+  return (
+    <div onClick={e => e.stopPropagation()} style={{
+      position:'fixed',
+      top:  flipY ? menu.y - items.length*32 - 16 : menu.y,
+      left: flipX ? menu.x - 196 : menu.x,
+      zIndex:2000, background:C.bg,
+      border:'0.5px solid #e0e0e5', borderRadius:'10px',
+      boxShadow:'0 4px 20px rgba(0,0,0,0.12)',
+      padding:'4px', minWidth:'196px', fontFamily:C.font,
+    }}>
+      {items.map((item, i) => item.sep
+        ? <div key={i} style={{ height:'1px', background:'#e5e5ea', margin:'3px 0' }} />
+        : (
+          <div key={i}
+            onClick={() => { onAction(item.action, menu.targetId); onClose(); }}
+            style={{ display:'flex', alignItems:'center', gap:'8px', padding:'0 10px', height:'32px', borderRadius:'7px', fontSize:'13px', cursor:'pointer', color: item.danger ? '#c0392b' : C.text }}
+            onMouseEnter={e => e.currentTarget.style.background = item.danger ? '#fdf2f2' : C.surface}
+            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+          >
+            <i className={'ti '+item.icon} style={{ fontSize:'14px', color: item.danger ? '#c0392b' : C.muted, flexShrink:0 }} />
+            {item.label}
+          </div>
+        )
+      )}
     </div>
   );
 }
 
 // ── Documents page ────────────────────────────────────────────────────────────
 
-function DocumentsPage({ selected, onToggle }) {
-  return (
-    <div style={{ padding:'24px 28px', overflow:'auto', flex:1, fontFamily:C.font }}>
-      <h1 style={{
-        fontSize:'20px', fontWeight:600, color:C.text,
-        marginBottom:'16px', letterSpacing:'-0.3px',
-      }}>Documents</h1>
+function DocumentsPage({ selected, onToggle, activeCo, companies }) {
+  const [nav,         setNav]         = useState({ view:'all', deptId:null, groupId:null });
+  const [assign,      setAssign]      = useState(TREE.docAssignments);
+  const [groups,      setGroups]      = useState([...TREE.groups]);
+  const [viewMode,    setViewMode]    = useState('grid');
+  const [search,      setSearch]      = useState('');
+  const [dragDocId,   setDragDocId]   = useState(null);
+  const [dragGroupId, setDragGroupId] = useState(null);
+  const [dragOverId,  setDragOverId]  = useState(null);
+  const [ctxMenu,     setCtxMenu]     = useState({ visible:false, x:0, y:0, type:'blank', targetId:null });
+  const [showNewFolder, setShowNewFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+
+  const q = search.toLowerCase();
+  const docsForGroup = gId => documents.filter(d => assign[d.id]?.groupId === gId);
+  const docsForDept  = dId => documents.filter(d => assign[d.id]?.deptId  === dId);
+  const docsLoose    = dId => docsForDept(dId).filter(d => !assign[d.id]?.groupId);
+
+  const curDept  = TREE.departments.find(d => d.id === nav.deptId) || null;
+  const curGroup = groups.find(g => g.id === nav.groupId)          || null;
+
+  const goTo     = (view, deptId = null, groupId = null) => { setNav({ view, deptId, groupId }); setSearch(''); };
+  const closeCtx = () => setCtxMenu(m => ({ ...m, visible:false }));
+  const openCtx  = (e, type, targetId = null) => {
+    e.preventDefault(); e.stopPropagation();
+    setCtxMenu({ visible:true, x:e.clientX, y:e.clientY, type, targetId });
+  };
+  const clearDrag = () => { setDragDocId(null); setDragGroupId(null); setDragOverId(null); };
+
+  useEffect(() => {
+    setNav({ view:'all', deptId:null, groupId:null });
+    if (activeCo === 'c1') { setGroups([...TREE.groups]); setAssign({ ...TREE.docAssignments }); }
+    else                   { setGroups([]); setAssign({}); }
+  }, [activeCo]);
+
+  useEffect(() => {
+    if (!ctxMenu.visible) return;
+    const onKey = e => { if (e.key === 'Escape') closeCtx(); };
+    document.addEventListener('click', closeCtx);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('click', closeCtx); document.removeEventListener('keydown', onKey); };
+  }, [ctxMenu.visible]);
+
+  const handleDrop = (e, tDeptId, tGroupId) => {
+    e.preventDefault();
+    if (dragDocId) {
+      setAssign(prev => ({ ...prev, [dragDocId]: { deptId:tDeptId, groupId:tGroupId||null } }));
+      setDragDocId(null);
+    } else if (dragGroupId && !tGroupId) {
+      setGroups(prev => prev.map(g => g.id === dragGroupId ? { ...g, deptId:tDeptId } : g));
+      setDragGroupId(null);
+    }
+    setDragOverId(null);
+  };
+
+  const handleCtxAction = (action, targetId) => {
+    if (action === 'newfolder') {
+      setNewFolderName(''); setShowNewFolder(true);
+    } else {
+      console.log('[CTX]', action, targetId);
+    }
+  };
+
+  const createFolder = () => {
+    const name = newFolderName.trim();
+    if (!name) return;
+    if (nav.view === 'dept' || nav.view === 'group') {
+      setGroups(prev => [...prev, { id:'g'+Date.now(), name, deptId: nav.deptId }]);
+    }
+    setNewFolderName(''); setShowNewFolder(false);
+  };
+
+
+  // ── row renderer ─────────────────────────────────────────────────────────
+
+  const renderRow = (doc, i, total, showLoc) => {
+    const isSel = selected.includes(doc.id);
+    const a   = assign[doc.id];
+    const dep = a ? TREE.departments.find(x => x.id === a.deptId) : null;
+    const grp = a?.groupId ? groups.find(x => x.id === a.groupId) : null;
+    const loc = dep ? (grp ? `${dep.name} › ${grp.name}` : dep.name) : '—';
+    return (
+      <tr key={doc.id}
+        draggable
+        onDragStart={e => { e.stopPropagation(); setDragDocId(doc.id); }}
+        onDragEnd={clearDrag}
+        onClick={() => onToggle(doc.id)}
+        onContextMenu={e => { e.stopPropagation(); openCtx(e, 'doc', doc.id); }}
+        style={{
+          background: isSel ? C.accent+'0a' : i%2===0 ? C.bg : '#fafafa',
+          cursor:'pointer', borderBottom: i<total-1 ? C.border : 'none',
+          opacity: dragDocId===doc.id ? 0.35 : 1,
+        }}
+      >
+        <td style={{ padding:'9px 12px', width:'32px' }}>
+          <div style={{
+            width:'15px', height:'15px', borderRadius:'4px',
+            border: isSel ? 'none' : '0.5px solid #c7c7cc',
+            background: isSel ? C.accent : 'transparent',
+            display:'flex', alignItems:'center', justifyContent:'center',
+          }}>
+            {isSel && <i className="ti ti-check" style={{ fontSize:'10px', color:'#fff' }} />}
+          </div>
+        </td>
+        <td style={{ padding:'9px 12px' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'7px' }}>
+            <i className={'ti '+(TYPE_ICON[doc.type]||'ti-file')} style={{ fontSize:'13px', color:TYPE_COLOR[doc.type], flexShrink:0 }} />
+            <span style={{ color:C.text, fontWeight:500 }}>{doc.name}</span>
+          </div>
+        </td>
+        <td style={{ padding:'9px 12px' }}><TypeBadge type={doc.type} /></td>
+        {showLoc && <td style={{ padding:'9px 12px', color:C.muted, fontSize:'12px' }}>{loc}</td>}
+        <td style={{ padding:'9px 12px', color:C.muted }}>{doc.date}</td>
+        <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{fmtSize(doc.size)}</td>
+        <td style={{ padding:'9px 12px', textAlign:'right' }}>
+          <span style={{ color:doc.weight>=0.9?'#1a7a4a':doc.weight>=0.7?C.text:C.muted }}>
+            {(doc.weight*100).toFixed(0)}%
+          </span>
+        </td>
+        <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{doc.links}</td>
+        <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{doc.graphs}</td>
+        <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{doc.queries}</td>
+      </tr>
+    );
+  };
+
+  const renderCard = (doc, showLoc = false) => {
+    const isSel = selected.includes(doc.id);
+    const a   = assign[doc.id];
+    const dep = a ? TREE.departments.find(x => x.id === a.deptId) : null;
+    const grp = a?.groupId ? groups.find(x => x.id === a.groupId) : null;
+    const loc = dep ? (grp ? `${dep.name} › ${grp.name}` : dep.name) : '—';
+    return (
+      <div key={doc.id}
+        draggable
+        onDragStart={e => { e.stopPropagation(); setDragDocId(doc.id); }}
+        onDragEnd={clearDrag}
+        onClick={() => onToggle(doc.id)}
+        onContextMenu={e => { e.stopPropagation(); openCtx(e, 'doc', doc.id); }}
+        style={{
+          background: isSel ? C.accent+'0a' : C.bg,
+          border: isSel ? '1px solid '+C.accent+'50' : C.border,
+          borderRadius:'10px', padding:'10px 12px', cursor:'pointer',
+          display:'flex', flexDirection:'column', gap:'6px',
+          opacity: dragDocId===doc.id ? 0.35 : 1,
+          transition:'border-color .15s, background .15s',
+        }}
+      >
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <i className={'ti '+(TYPE_ICON[doc.type]||'ti-file')} style={{ fontSize:'18px', color:TYPE_COLOR[doc.type] }} />
+          <div style={{ display:'flex', alignItems:'center', gap:'5px' }}>
+            <TypeBadge type={doc.type} />
+            <div style={{
+              width:'14px', height:'14px', borderRadius:'3px', flexShrink:0,
+              border: isSel ? 'none' : '0.5px solid #c7c7cc',
+              background: isSel ? C.accent : 'transparent',
+              display:'flex', alignItems:'center', justifyContent:'center',
+            }}>
+              {isSel && <i className="ti ti-check" style={{ fontSize:'9px', color:'#fff' }} />}
+            </div>
+          </div>
+        </div>
+        <div title={doc.name} style={{ fontSize:'12px', fontWeight:600, color:C.text, lineHeight:'1.3', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+          {doc.name}
+        </div>
+        <div style={{ fontSize:'11px', color:C.muted }}>{doc.area} · {fmtSize(doc.size)}</div>
+        {showLoc && <div style={{ fontSize:'11px', color:C.muted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }} title={loc}>{loc}</div>}
+        <div style={{ fontSize:'11px', color:C.muted }}>{doc.date}</div>
+        <div style={{ height:'2px', background:'#e5e5ea', borderRadius:'2px', overflow:'hidden', marginTop:'1px' }}>
+          <div style={{ height:'100%', width:(doc.weight*100)+'%', borderRadius:'2px',
+            background: doc.weight>=0.9?'#1a7a4a':doc.weight>=0.7?C.accent:'#f0a830' }} />
+        </div>
+      </div>
+    );
+  };
+
+  const renderCards = (docs, showLoc = false) => {
+    if (docs.length === 0) return (
+      <div style={{ textAlign:'center', padding:'48px', color:C.muted, fontSize:'13px' }}>No documents</div>
+    );
+    return (
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:'10px' }}>
+        {docs.map(doc => renderCard(doc, showLoc))}
+      </div>
+    );
+  };
+
+  const renderDocs = (docs, showLoc = false) =>
+    viewMode === 'grid' ? renderCards(docs, showLoc) : renderTable(docs, showLoc);
+
+  const renderTable = (docs, showLoc = false) => {
+    const heads   = ['','Name','Type',...(showLoc?['Location']:[]),'Date','Size','Weight','Links','Graphs','Queries'];
+    const rightAt = showLoc ? 4 : 3;
+    return (
       <div style={{ border:C.border, borderRadius:'10px', overflow:'hidden', background:C.bg }}>
         <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'13px' }}>
           <thead>
             <tr>
-              {['','Name','Type','Area','Date','Size','Weight','Links','Graphs','Queries'].map((h,i) => (
+              {heads.map((h,i) => (
                 <th key={i} style={{
                   padding:'8px 12px', fontSize:'11px', fontWeight:600, color:C.muted,
-                  textAlign:i>=5?'right':'left', letterSpacing:'0.3px', whiteSpace:'nowrap',
-                  borderBottom:C.border, background:C.surface, position:'sticky', top:0,
+                  textAlign: i>=rightAt ? 'right' : 'left', letterSpacing:'0.3px', whiteSpace:'nowrap',
+                  borderBottom:C.border, background:C.surface,
                 }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {documents.map((doc, i) => {
-              const isSel = selected.includes(doc.id);
-              return (
-                <tr key={doc.id} onClick={() => onToggle(doc.id)} style={{
-                  background: isSel ? C.accent+'0a' : i%2===0 ? C.bg : '#fafafa',
-                  cursor:'pointer',
-                  borderBottom: i < documents.length-1 ? C.border : 'none',
-                }}>
-                  <td style={{ padding:'9px 12px', width:'32px' }}>
-                    <div style={{
-                      width:'15px', height:'15px', borderRadius:'4px',
-                      border: isSel?'none':'0.5px solid #c7c7cc',
-                      background: isSel?C.accent:'transparent',
-                      display:'flex', alignItems:'center', justifyContent:'center',
-                    }}>
-                      {isSel && <i className="ti ti-check" style={{ fontSize:'10px', color:'#fff' }} />}
-                    </div>
-                  </td>
-                  <td style={{ padding:'9px 12px', color:C.text, fontWeight:500 }}>{doc.name}</td>
-                  <td style={{ padding:'9px 12px' }}><TypeBadge type={doc.type} /></td>
-                  <td style={{ padding:'9px 12px', color:C.muted }}>{doc.area}</td>
-                  <td style={{ padding:'9px 12px', color:C.muted }}>{doc.date}</td>
-                  <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{fmtSize(doc.size)}</td>
-                  <td style={{ padding:'9px 12px', textAlign:'right' }}>
-                    <span style={{ color:doc.weight>=0.9?'#1a7a4a':doc.weight>=0.7?C.text:C.muted }}>
-                      {(doc.weight*100).toFixed(0)}%
-                    </span>
-                  </td>
-                  <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{doc.links}</td>
-                  <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{doc.graphs}</td>
-                  <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{doc.queries}</td>
-                </tr>
-              );
-            })}
+            {docs.length === 0
+              ? <tr><td colSpan={heads.length} style={{ padding:'32px', textAlign:'center', color:C.muted }}>No documents</td></tr>
+              : docs.map((doc,i) => renderRow(doc, i, docs.length, showLoc))
+            }
           </tbody>
         </table>
       </div>
+    );
+  };
+
+  // ── breadcrumb ────────────────────────────────────────────────────────────
+
+  const activeCoDef = companies.find(c => c.id === activeCo) || companies[0];
+  const crumbs = [{ label: activeCoDef.name, go: () => goTo('all') }];
+  if (nav.view === 'flat') crumbs.push({ label:'All documents', go: null });
+  if (nav.view === 'dept' || nav.view === 'group')
+    crumbs.push({ label: curDept?.name, go: () => goTo('dept', nav.deptId) });
+  if (nav.view === 'group')
+    crumbs.push({ label: curGroup?.name, go: null });
+
+  // ── content ───────────────────────────────────────────────────────────────
+
+  let content;
+
+  if (nav.view === 'flat') {
+    content = renderDocs(documents.filter(d => !q || d.name.toLowerCase().includes(q)), true);
+  }
+  else if (nav.view === 'all') {
+    if (activeCo !== 'c1') {
+      content = (
+        <div style={{ textAlign:'center', padding:'60px', color:C.muted, fontSize:'13px' }}>
+          <i className="ti ti-building" style={{ fontSize:'40px', color:'#e0e0e5', display:'block', marginBottom:'12px' }} />
+          Esta empresa no tiene departamentos. Click derecho para crear uno.
+        </div>
+      );
+    } else {
+      const depts = TREE.departments.filter(dep =>
+        !q || dep.name.toLowerCase().includes(q) || docsForDept(dep.id).some(d => d.name.toLowerCase().includes(q))
+      );
+      content = (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'12px' }}>
+          {depts.map(dep => {
+            const dDocs   = docsForDept(dep.id);
+            const dGroups = groups.filter(g => g.deptId === dep.id);
+            const isOver  = dragOverId === dep.id;
+            return (
+              <div key={dep.id}
+                onClick={() => goTo('dept', dep.id)}
+                onContextMenu={e => { e.stopPropagation(); openCtx(e, 'folder', dep.id); }}
+                onDragOver={e => { e.preventDefault(); setDragOverId(dep.id); }}
+                onDragLeave={() => setDragOverId(null)}
+                onDrop={e => handleDrop(e, dep.id, null)}
+                style={{
+                  background: isOver ? C.accent+'12' : C.bg, cursor:'pointer',
+                  border: isOver ? '1px solid '+C.accent : C.border,
+                  borderRadius:'12px', padding:'20px', transition:'all .1s',
+                }}
+              >
+                <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'14px' }}>
+                  <div style={{ width:'36px', height:'36px', borderRadius:'9px', background:C.accent+'14', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                    <i className={'ti '+dep.icon} style={{ fontSize:'18px', color:C.accent }} />
+                  </div>
+                  <span style={{ fontSize:'14px', fontWeight:600, color:C.text }}>{dep.name}</span>
+                </div>
+                <div style={{ display:'flex', gap:'20px' }}>
+                  <div>
+                    <div style={{ fontSize:'20px', fontWeight:700, color:C.text, lineHeight:1 }}>{dDocs.length}</div>
+                    <div style={{ fontSize:'10px', color:C.muted, textTransform:'uppercase', letterSpacing:'0.4px', marginTop:'2px' }}>Docs</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize:'20px', fontWeight:700, color:C.text, lineHeight:1 }}>{dGroups.length}</div>
+                    <div style={{ fontSize:'10px', color:C.muted, textTransform:'uppercase', letterSpacing:'0.4px', marginTop:'2px' }}>Groups</div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+  }
+  else if (nav.view === 'dept') {
+    const depGroups = groups.filter(g => g.deptId === nav.deptId);
+    const fGroups   = depGroups.filter(g =>
+      !q || g.name.toLowerCase().includes(q) || docsForGroup(g.id).some(d => d.name.toLowerCase().includes(q))
+    );
+    const loose = docsLoose(nav.deptId).filter(d => !q || d.name.toLowerCase().includes(q));
+    content = (
+      <div>
+        {fGroups.length > 0 && (
+          <div style={{ marginBottom:'24px' }}>
+            <div style={{ fontSize:'11px', fontWeight:600, color:C.muted, textTransform:'uppercase', letterSpacing:'0.6px', marginBottom:'10px' }}>Groups</div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'10px' }}>
+              {fGroups.map(g => {
+                const gDocs  = docsForGroup(g.id);
+                const isOver = dragOverId === g.id;
+                return (
+                  <div key={g.id}
+                    draggable
+                    onClick={() => goTo('group', nav.deptId, g.id)}
+                    onContextMenu={e => { e.stopPropagation(); openCtx(e, 'folder', g.id); }}
+                    onDragStart={e => { e.stopPropagation(); setDragGroupId(g.id); }}
+                    onDragEnd={clearDrag}
+                    onDragOver={e => { e.preventDefault(); setDragOverId(g.id); }}
+                    onDragLeave={() => setDragOverId(null)}
+                    onDrop={e => handleDrop(e, nav.deptId, g.id)}
+                    style={{
+                      background: isOver ? C.accent+'12' : C.surface,
+                      border: isOver ? '1px solid '+C.accent : C.border,
+                      borderRadius:'10px', padding:'14px 16px', cursor:'pointer',
+                      display:'flex', alignItems:'center', gap:'10px', transition:'all .1s',
+                      opacity: dragGroupId===g.id ? 0.4 : 1,
+                    }}
+                  >
+                    <i className="ti ti-folder-filled" style={{ fontSize:'22px', color:'#f0a830', flexShrink:0 }} />
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontSize:'13px', fontWeight:500, color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{g.name}</div>
+                      <div style={{ fontSize:'11px', color:C.muted }}>{gDocs.length} doc{gDocs.length!==1?'s':''}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {loose.length > 0 && (
+          <div>
+            <div style={{ fontSize:'11px', fontWeight:600, color:C.muted, textTransform:'uppercase', letterSpacing:'0.6px', marginBottom:'10px' }}>Documents (sin grupo)</div>
+            {renderDocs(loose)}
+          </div>
+        )}
+        {fGroups.length === 0 && loose.length === 0 && (
+          <div style={{ textAlign:'center', padding:'48px', color:C.muted, fontSize:'13px' }}>No hay contenido en este departamento</div>
+        )}
+      </div>
+    );
+  }
+  else if (nav.view === 'group') {
+    const docs = docsForGroup(nav.groupId).filter(d => !q || d.name.toLowerCase().includes(q));
+    content = <div>{renderDocs(docs)}</div>;
+  }
+
+  // ── shell ─────────────────────────────────────────────────────────────────
+
+  return (
+    <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', fontFamily:C.font }}>
+
+      {/* Breadcrumb */}
+      <div style={{ padding:'10px 24px', borderBottom:C.border, flexShrink:0, display:'flex', alignItems:'center', gap:'2px' }}>
+        {crumbs.map((c, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <span style={{ color:'#c7c7cc', fontSize:'13px', padding:'0 6px' }}>›</span>}
+            <span onClick={c.go || undefined} style={{ fontSize:'13px', fontWeight: i===crumbs.length-1?600:400, color: c.go?C.accent:C.text, cursor: c.go?'pointer':'default' }}>{c.label}</span>
+          </React.Fragment>
+        ))}
+        {nav.view === 'all' && (
+          <>
+            <span style={{ color:'#c7c7cc', fontSize:'13px', padding:'0 8px' }}>·</span>
+            <span onClick={() => goTo('flat')} style={{ fontSize:'12px', color:C.muted, cursor:'pointer', textDecoration:'underline' }}>All documents</span>
+          </>
+        )}
+        <div style={{ flex:1 }} />
+        <span style={{ fontSize:'11px', color:C.muted }}>{documents.length} docs</span>
+      </div>
+
+      {/* Toolbar */}
+      <div style={{ padding:'8px 24px', borderBottom:C.border, flexShrink:0, display:'flex', alignItems:'center', gap:'8px' }}>
+        <button onClick={() => handleCtxAction('newfolder', null)} style={{ display:'flex', alignItems:'center', gap:'5px', padding:'5px 12px', fontSize:'11px', fontWeight:500, color:C.muted, background:'transparent', border:C.border, borderRadius:'7px', cursor:'pointer', fontFamily:C.font }}>
+          <i className="ti ti-folder-plus" style={{ fontSize:'13px' }} /> New folder
+        </button>
+        <div style={{ flex:1 }} />
+        <div style={{ position:'relative' }}>
+          <i className="ti ti-search" style={{ position:'absolute', left:'8px', top:'50%', transform:'translateY(-50%)', fontSize:'12px', color:C.muted, pointerEvents:'none' }} />
+          <input type="text" placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)}
+            style={{ padding:'5px 10px 5px 26px', fontSize:'12px', width:'180px', border:C.border, borderRadius:'7px', background:C.surface, color:C.text, outline:'none', fontFamily:C.font }} />
+        </div>
+        {['grid','list'].map(mode => (
+          <button key={mode} onClick={() => setViewMode(mode)} style={{ width:'30px', height:'30px', display:'flex', alignItems:'center', justifyContent:'center', borderRadius:'7px', cursor:'pointer', border:C.border, background: viewMode===mode?C.accent+'14':'transparent', color: viewMode===mode?C.accent:C.muted }}>
+            <i className={'ti '+(mode==='grid'?'ti-layout-grid':'ti-list')} style={{ fontSize:'14px' }} />
+          </button>
+        ))}
+      </div>
+
+      {/* Content */}
+      <div style={{ flex:1, overflow:'auto', padding:'20px 24px' }} onContextMenu={e => openCtx(e, nav.view === 'all' ? 'blank' : 'blank_inner')}>{content}</div>
+
+      {/* Context menu */}
+      <ContextMenu menu={ctxMenu} onClose={closeCtx} onAction={handleCtxAction} />
+
+      {/* New folder modal */}
+      {showNewFolder && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.18)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center' }}
+          onClick={() => setShowNewFolder(false)}>
+          <div style={{ background:C.bg, borderRadius:'16px', padding:'28px', width:'340px', boxShadow:'0 8px 40px rgba(0,0,0,0.15)', fontFamily:C.font }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize:'15px', fontWeight:600, color:C.text, marginBottom:'16px' }}>Nueva carpeta</div>
+            <input type="text" placeholder="Nombre de la carpeta…" value={newFolderName}
+              onChange={e => setNewFolderName(e.target.value)}
+              onKeyDown={e => e.key==='Enter' && createFolder()}
+              autoFocus
+              style={{ width:'100%', boxSizing:'border-box', padding:'10px 12px', fontSize:'13px', border:C.border, borderRadius:'8px', outline:'none', fontFamily:C.font, color:C.text }}
+            />
+            <div style={{ display:'flex', gap:'8px', marginTop:'16px', justifyContent:'flex-end' }}>
+              <button onClick={() => setShowNewFolder(false)} style={{ padding:'7px 16px', fontSize:'12px', border:C.border, borderRadius:'8px', cursor:'pointer', background:'transparent', fontFamily:C.font }}>Cancel</button>
+              <button onClick={createFolder} style={{ padding:'7px 16px', fontSize:'12px', background:C.accent, color:'#fff', border:'none', borderRadius:'8px', cursor:'pointer', fontFamily:C.font, fontWeight:500 }}>Crear</button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
 
 // ── Chat page ─────────────────────────────────────────────────────────────────
 
-function ChatPage({ selected, onRemove, llm, onTrackQuery }) {
-  const [messages, setMessages] = useState([...CHAT_HISTORY]);
-  const [input,    setInput]    = useState('');
-  const bottomRef = useRef(null);
+function ChatPage({ selected, onRemove, llm, onLlmChange, onTrackQuery }) {
+  const [messages,   setMessages]   = useState([]);
+  const [input,      setInput]      = useState('');
+  const [attachments, setAttachments] = useState([]);
+  const bottomRef  = useRef(null);
+  const fileRef    = useRef(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior:'smooth' });
@@ -442,7 +982,7 @@ function ChatPage({ selected, onRemove, llm, onTrackQuery }) {
       { role:'ai', text:aiText, sources: n > 0 ? [...selected] : [] },
     ]);
     if (n > 0) onTrackQuery([...selected]);
-    setInput('');
+    setInput(''); setAttachments([]);
   };
 
   const onKeyDown = e => {
@@ -489,7 +1029,28 @@ function ChatPage({ selected, onRemove, llm, onTrackQuery }) {
       {/* Messages */}
       <div style={{ flex:1, overflow:'auto', padding:'28px 20px 12px' }}>
         <div style={{ maxWidth:'720px', margin:'0 auto' }}>
-          {messages.map((msg, i) => <MessageBubble key={i} msg={msg} />)}
+          {messages.length === 0 ? (
+            <div style={{
+              display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+              minHeight:'300px', gap:'12px', userSelect:'none',
+            }}>
+              <div style={{
+                width:'48px', height:'48px', borderRadius:'14px', background:C.surface,
+                display:'flex', alignItems:'center', justifyContent:'center',
+              }}>
+                <i className="ti ti-message-circle" style={{ fontSize:'24px', color:'#c7c7cc' }} />
+              </div>
+              <div style={{ fontSize:'15px', fontWeight:600, color:C.text }}>Ask anything</div>
+              <div style={{ fontSize:'13px', color:C.muted, textAlign:'center', maxWidth:'320px', lineHeight:'1.5' }}>
+                {selected.length === 0
+                  ? 'Select documents from the sidebar to add context, then ask your question.'
+                  : `${selected.length} document${selected.length !== 1 ? 's' : ''} in context. Ask a question about them.`
+                }
+              </div>
+            </div>
+          ) : (
+            messages.map((msg, i) => <MessageBubble key={i} msg={msg} />)
+          )}
           <div ref={bottomRef} />
         </div>
       </div>
@@ -497,35 +1058,98 @@ function ChatPage({ selected, onRemove, llm, onTrackQuery }) {
       {/* Input */}
       <div style={{ padding:'12px 20px 20px', flexShrink:0 }}>
         <div style={{ maxWidth:'720px', margin:'0 auto' }}>
-          <div style={{ position:'relative' }}>
+          <input
+            ref={fileRef} type="file" multiple
+            accept=".pdf,.xlsx,.csv,.docx,.txt"
+            style={{ display:'none' }}
+            onChange={e => {
+              const files = Array.from(e.target.files);
+              setAttachments(prev => [...prev, ...files.map(f => ({ name:f.name, size:f.size }))]);
+              e.target.value = '';
+            }}
+          />
+          <div style={{
+            border: C.border, borderRadius:'16px', background:C.bg,
+            boxShadow:'0 2px 12px rgba(0,0,0,0.06)',
+          }}>
+            {attachments.length > 0 && (
+              <div style={{ display:'flex', flexWrap:'wrap', gap:'6px', padding:'10px 12px 0' }}>
+                {attachments.map((f, i) => (
+                  <div key={i} style={{
+                    display:'inline-flex', alignItems:'center', gap:'5px',
+                    background:C.surface, border:C.border,
+                    borderRadius:'20px', padding:'3px 8px',
+                    fontSize:'11px', color:C.text, maxWidth:'180px',
+                  }}>
+                    <i className="ti ti-paperclip" style={{ fontSize:'11px', color:C.muted, flexShrink:0 }} />
+                    <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{f.name}</span>
+                    <span onClick={() => setAttachments(prev => prev.filter((_,j) => j!==i))}
+                      style={{ cursor:'pointer', color:C.muted, flexShrink:0, display:'flex', alignItems:'center' }}>
+                      <i className="ti ti-x" style={{ fontSize:'10px' }} />
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             <textarea rows={1} value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={onKeyDown}
               placeholder="Ask about these documents…"
               style={{
                 width:'100%', boxSizing:'border-box',
-                padding:'13px 52px 13px 16px',
-                borderRadius:'14px', border:C.border,
+                padding:'12px 16px 4px',
+                border:'none', outline:'none', background:'transparent',
                 fontSize:'14px', lineHeight:'1.5', resize:'none',
-                outline:'none', background:C.bg,
                 color:C.text, fontFamily:C.font,
               }}
             />
-            <button onClick={send} disabled={!input.trim()} style={{
-              position:'absolute', right:'10px', bottom:'10px',
-              width:'32px', height:'32px', borderRadius:'50%', border:'none',
-              background: input.trim() ? C.accent : '#d1d1d6',
-              cursor: input.trim() ? 'pointer' : 'default',
-              display:'flex', alignItems:'center', justifyContent:'center',
+            <div style={{
+              display:'flex', alignItems:'center', justifyContent:'space-between',
+              padding:'8px 10px 10px',
             }}>
-              <i className="ti ti-arrow-up" style={{ fontSize:'14px', color:'#fff' }} />
-            </button>
+              <button onClick={() => fileRef.current?.click()} style={{
+                width:'30px', height:'30px', borderRadius:'8px', border:C.border,
+                background:'transparent', cursor:'pointer',
+                display:'flex', alignItems:'center', justifyContent:'center', color:C.muted,
+              }}>
+                <i className="ti ti-plus" style={{ fontSize:'15px' }} />
+              </button>
+              <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
+                <select value={llm} onChange={e => onLlmChange(e.target.value)} style={{
+                  fontSize:'12px', padding:'4px 8px',
+                  border:C.border, borderRadius:'7px',
+                  background:C.surface, color:C.text,
+                  outline:'none', cursor:'pointer', fontFamily:C.font,
+                }}>
+                  <option value="claude">Claude 3.5</option>
+                  <option value="gpt4o">GPT-4o</option>
+                  <option value="gemini">Gemini</option>
+                  <option value="llama">Llama</option>
+                </select>
+                <button style={{
+                  width:'30px', height:'30px', borderRadius:'8px', border:C.border,
+                  background:'transparent', cursor:'pointer',
+                  display:'flex', alignItems:'center', justifyContent:'center', color:C.muted,
+                }}>
+                  <i className="ti ti-microphone" style={{ fontSize:'14px' }} />
+                </button>
+                <button onClick={send} disabled={!input.trim()} style={{
+                  width:'32px', height:'32px', borderRadius:'50%', border:'none',
+                  background: input.trim() ? C.accent : '#d1d1d6',
+                  cursor: input.trim() ? 'pointer' : 'default',
+                  display:'flex', alignItems:'center', justifyContent:'center',
+                  transition:'background .15s',
+                }}>
+                  <i className="ti ti-arrow-up" style={{ fontSize:'14px', color:'#fff' }} />
+                </button>
+              </div>
+            </div>
           </div>
           <div style={{
             display:'flex', alignItems:'center', justifyContent:'center', gap:'5px',
-            padding:'8px 0 0', fontSize:'11px', color:C.muted,
+            padding:'8px 0 0', fontSize:'11px', color:'#c7c7cc',
           }}>
-            <i className="ti ti-lock" style={{ fontSize:'12px' }} />
+            <i className="ti ti-lock" style={{ fontSize:'11px' }} />
             {selected.length} doc{selected.length!==1?'s':''} in context · vectors stored on your server
           </div>
         </div>
@@ -680,9 +1304,17 @@ function GraphsPage({ selected, onToggle }) {
     const H = svgEl.clientHeight || 600;
 
     const selDocs  = documents.filter(d => selected.includes(d.id));
-    const selEdges = GRAPH_EDGES.filter(e => selected.includes(e.from) && selected.includes(e.to));
     const nodes    = selDocs.map(d => ({ ...d }));
-    const links    = selEdges.map(e => ({ source: e.from, target: e.to, weight: e.weight }));
+    // Build edge-weight map from co-occurrence data
+    const edgeWeightMap = {};
+    GRAPH_EDGES.forEach(e => { edgeWeightMap[[e.from, e.to].sort().join('|')] = e.weight; });
+    // Connect every pair of selected docs; use co-occurrence weight when available
+    const links = [];
+    for (let i = 0; i < selDocs.length; i++)
+      for (let j = i + 1; j < selDocs.length; j++) {
+        const k = [selDocs[i].id, selDocs[j].id].sort().join('|');
+        links.push({ source: selDocs[i].id, target: selDocs[j].id, weight: edgeWeightMap[k] || 1 });
+      }
 
     const nodeR = d => 8 + d.weight * 16;
 
@@ -794,9 +1426,8 @@ function GraphsPage({ selected, onToggle }) {
     };
   }, [selected]);
 
-  const n        = selected.length;
-  const selEdges = GRAPH_EDGES.filter(e => selected.includes(e.from) && selected.includes(e.to));
-  const ec       = selEdges.length;
+  const n  = selected.length;
+  const ec = n >= 2 ? n * (n - 1) / 2 : 0;
 
   return (
     <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', fontFamily:C.font }}>
@@ -1019,8 +1650,18 @@ function VisualizePage({ selected, onToggle }) {
   const [search,  setSearch]  = useState('');
   const [viewId,  setViewId]  = useState(null);
 
-  const filtered = documents.filter(d => d.name.toLowerCase().includes(search.toLowerCase()));
-  const viewDoc  = documents.find(d => d.id === viewId) || null;
+  const selDocs  = documents.filter(d => selected.includes(d.id));
+  const filtered = selDocs.filter(d => d.name.toLowerCase().includes(search.toLowerCase()));
+  const viewDoc  = selDocs.find(d => d.id === viewId) || null;
+
+  if (selected.length === 0) return (
+    <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', fontFamily:C.font }}>
+      <div style={{ textAlign:'center' }}>
+        <i className="ti ti-eye" style={{ fontSize:'44px', color:'#e0e0e5', display:'block', marginBottom:'12px' }} />
+        <span style={{ fontSize:'13px', color:C.muted }}>Marca documentos en el sidebar para visualizarlos</span>
+      </div>
+    </div>
+  );
 
   return (
     <div style={{ flex:1, display:'flex', overflow:'hidden', fontFamily:C.font }}>
@@ -1113,15 +1754,240 @@ function VisualizePage({ selected, onToggle }) {
   );
 }
 
-// ── Placeholder ───────────────────────────────────────────────────────────────
+// ── Policies data ─────────────────────────────────────────────────────────────
 
-function PlaceholderPage({ title }) {
+const POLICIES = [
+  { id:'p1', name:'Cierre Mensual',    docs:['doc-001','doc-002','doc-006'], roles:['CEO','CFO','Contador'],  status:'active', created:'2024-03-01' },
+  { id:'p2', name:'Auditoría Externa', docs:['doc-002','doc-004','doc-005'], roles:['Auditor'],               status:'active', created:'2024-02-15' },
+  { id:'p3', name:'Análisis IT',       docs:['doc-002','doc-007'],           roles:['CTO','IT Manager'],      status:'draft',  created:'2024-03-10' },
+  { id:'p4', name:'Vista RRHH',        docs:['doc-004'],                     roles:['RRHH'],                  status:'active', created:'2024-01-20' },
+];
+
+const ACCESS_LEVELS = [
+  { key:'full',    icon:'ti-layout-grid',   label:'Full module',      desc:'Acceso completo a todos los vectores del documento' },
+  { key:'doc',     icon:'ti-file-text',     label:'Document only',    desc:'Solo el documento, sin metadatos ni relaciones' },
+  { key:'temp',    icon:'ti-clock',         label:'Temporary (24h)',  desc:'Acceso expira automáticamente en 24 horas' },
+];
+
+function PoliciesPage() {
+  const [selId,    setSelId]    = useState(null);
+  const [accessLv, setAccessLv] = useState('full');
+
+  const policy = POLICIES.find(p => p.id === selId) || null;
+
   return (
-    <div style={{
-      flex:1, display:'flex', alignItems:'center', justifyContent:'center',
-      color:C.muted, fontSize:'14px', fontFamily:C.font,
-    }}>
-      {title} — coming soon
+    <div style={{ flex:1, display:'flex', overflow:'hidden', fontFamily:C.font }}>
+
+      {/* ── Left panel: policy list ── */}
+      <div style={{
+        width:'320px', minWidth:'320px', borderRight:C.border,
+        display:'flex', flexDirection:'column', overflow:'hidden', background:C.bg,
+      }}>
+        {/* Header */}
+        <div style={{
+          padding:'16px 16px 12px', borderBottom:C.border, flexShrink:0,
+          display:'flex', alignItems:'center', justifyContent:'space-between',
+        }}>
+          <span style={{ fontSize:'13px', fontWeight:600, color:C.text }}>Policies</span>
+          <button style={{
+            display:'flex', alignItems:'center', gap:'5px',
+            padding:'5px 12px', fontSize:'11px', fontWeight:500,
+            color:C.accent, background:C.accent+'12',
+            border:'0.5px solid '+C.accent+'35', borderRadius:'8px',
+            cursor:'pointer', fontFamily:C.font,
+          }}>
+            <i className="ti ti-plus" style={{ fontSize:'12px' }} />
+            New policy
+          </button>
+        </div>
+
+        {/* List */}
+        <div style={{ flex:1, overflow:'auto', padding:'8px' }}>
+          {POLICIES.map(p => {
+            const pDocs   = p.docs.map(id => documents.find(d => d.id === id)).filter(Boolean);
+            const isActive = p.id === selId;
+            return (
+              <div key={p.id} onClick={() => { setSelId(p.id); setAccessLv('full'); }} style={{
+                padding:'12px 14px', borderRadius:'8px', cursor:'pointer', marginBottom:'4px',
+                background: isActive ? C.accent+'10' : C.surface,
+                border: isActive ? '0.5px solid '+C.accent+'40' : C.border,
+              }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'6px' }}>
+                  <span style={{ fontSize:'13px', fontWeight:500, color:C.text }}>{p.name}</span>
+                  <span style={{
+                    fontSize:'10px', fontWeight:600, padding:'2px 7px', borderRadius:'10px',
+                    color:      p.status === 'active' ? '#1a7a4a' : C.muted,
+                    background: p.status === 'active' ? '#1a7a4a18' : C.surface,
+                    border:     p.status === 'active' ? '0.5px solid #1a7a4a30' : C.border,
+                    textTransform:'uppercase', letterSpacing:'0.4px',
+                  }}>{p.status}</span>
+                </div>
+                <div style={{ display:'flex', gap:'4px', flexWrap:'wrap', marginBottom:'6px' }}>
+                  {pDocs.map(doc => (
+                    <span key={doc.id} style={{
+                      fontSize:'10px', padding:'1px 6px', borderRadius:'8px',
+                      background:C.bg, border:C.border, color:C.muted,
+                      display:'inline-flex', alignItems:'center', gap:'3px',
+                    }}>
+                      <i className={'ti '+(TYPE_ICON[doc.type]||'ti-file')}
+                         style={{ fontSize:'10px', color:TYPE_COLOR[doc.type] }} />
+                      {doc.name.length > 18 ? doc.name.slice(0,17)+'…' : doc.name}
+                    </span>
+                  ))}
+                </div>
+                <div style={{ display:'flex', gap:'4px', flexWrap:'wrap' }}>
+                  {p.roles.map(r => (
+                    <span key={r} style={{
+                      fontSize:'10px', padding:'1px 6px', borderRadius:'8px',
+                      background:C.accent+'10', color:C.accent, border:'0.5px solid '+C.accent+'25',
+                      display:'inline-flex', alignItems:'center', gap:'3px',
+                    }}>
+                      <i className="ti ti-user" style={{ fontSize:'10px' }} />
+                      {r}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── Right panel: detail ── */}
+      <div style={{ flex:1, overflow:'auto', background:C.surface, padding:'28px' }}>
+        {!policy ? (
+          <div style={{
+            height:'100%', display:'flex', flexDirection:'column',
+            alignItems:'center', justifyContent:'center', gap:'12px',
+          }}>
+            <i className="ti ti-shield-check" style={{ fontSize:'44px', color:'#e0e0e5' }} />
+            <span style={{ fontSize:'13px', color:C.muted }}>Selecciona una política para ver su detalle</span>
+          </div>
+        ) : (
+          <div style={{ maxWidth:'640px', margin:'0 auto' }}>
+
+            {/* Policy header */}
+            <div style={{
+              background:C.bg, borderRadius:'12px', border:C.border,
+              padding:'20px 24px', marginBottom:'16px',
+              display:'flex', alignItems:'center', justifyContent:'space-between',
+            }}>
+              <div>
+                <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'4px' }}>
+                  <span style={{ fontSize:'17px', fontWeight:600, color:C.text }}>{policy.name}</span>
+                  <span style={{
+                    fontSize:'10px', fontWeight:600, padding:'2px 8px', borderRadius:'10px',
+                    color:      policy.status === 'active' ? '#1a7a4a' : C.muted,
+                    background: policy.status === 'active' ? '#1a7a4a18' : C.surface,
+                    border:     policy.status === 'active' ? '0.5px solid #1a7a4a30' : C.border,
+                    textTransform:'uppercase', letterSpacing:'0.4px',
+                  }}>{policy.status}</span>
+                </div>
+                <span style={{ fontSize:'11px', color:C.muted }}>
+                  Creada el {new Date(policy.created).toLocaleDateString('es-ES', { day:'2-digit', month:'long', year:'numeric' })}
+                </span>
+              </div>
+              <button style={{
+                padding:'7px 16px', fontSize:'12px', fontWeight:500,
+                color:C.accent, background:C.accent+'12',
+                border:'0.5px solid '+C.accent+'35', borderRadius:'8px',
+                cursor:'pointer', fontFamily:C.font,
+              }}>Edit policy</button>
+            </div>
+
+            {/* Documents */}
+            <div style={{
+              background:C.bg, borderRadius:'12px', border:C.border,
+              padding:'18px 24px', marginBottom:'12px',
+            }}>
+              <div style={{ fontSize:'11px', fontWeight:600, color:C.muted, textTransform:'uppercase', letterSpacing:'0.5px', marginBottom:'12px' }}>
+                Documents in policy
+              </div>
+              <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
+                {policy.docs.map(id => {
+                  const doc = documents.find(d => d.id === id);
+                  if (!doc) return null;
+                  return (
+                    <div key={id} style={{
+                      display:'inline-flex', alignItems:'center', gap:'6px',
+                      padding:'6px 12px', borderRadius:'8px',
+                      background:C.surface, border:C.border,
+                    }}>
+                      <i className={'ti '+(TYPE_ICON[doc.type]||'ti-file')}
+                         style={{ fontSize:'14px', color:TYPE_COLOR[doc.type] }} />
+                      <div>
+                        <div style={{ fontSize:'12px', fontWeight:500, color:C.text }}>{doc.name}</div>
+                        <div style={{ fontSize:'10px', color:C.muted }}>{doc.area} · {doc.type.toUpperCase()}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Roles */}
+            <div style={{
+              background:C.bg, borderRadius:'12px', border:C.border,
+              padding:'18px 24px', marginBottom:'12px',
+            }}>
+              <div style={{ fontSize:'11px', fontWeight:600, color:C.muted, textTransform:'uppercase', letterSpacing:'0.5px', marginBottom:'12px' }}>
+                Access roles
+              </div>
+              <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
+                {policy.roles.map(r => (
+                  <div key={r} style={{
+                    display:'inline-flex', alignItems:'center', gap:'6px',
+                    padding:'6px 14px', borderRadius:'8px',
+                    background:C.accent+'10', border:'0.5px solid '+C.accent+'30',
+                  }}>
+                    <i className="ti ti-user" style={{ fontSize:'14px', color:C.accent }} />
+                    <span style={{ fontSize:'12px', fontWeight:500, color:C.accent }}>{r}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Access level */}
+            <div style={{
+              background:C.bg, borderRadius:'12px', border:C.border,
+              padding:'18px 24px',
+            }}>
+              <div style={{ fontSize:'11px', fontWeight:600, color:C.muted, textTransform:'uppercase', letterSpacing:'0.5px', marginBottom:'12px' }}>
+                Access level
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'8px' }}>
+                {ACCESS_LEVELS.map(lv => {
+                  const isOn = accessLv === lv.key;
+                  return (
+                    <div key={lv.key} onClick={() => setAccessLv(lv.key)} style={{
+                      padding:'14px 14px', borderRadius:'10px', cursor:'pointer',
+                      background: isOn ? C.accent+'12' : C.surface,
+                      border: isOn ? '0.5px solid '+C.accent+'50' : C.border,
+                      transition:'all .15s',
+                    }}>
+                      <i className={'ti '+lv.icon} style={{
+                        fontSize:'20px', color: isOn ? C.accent : C.muted,
+                        display:'block', marginBottom:'8px',
+                      }} />
+                      <div style={{ fontSize:'12px', fontWeight:600, color: isOn ? C.accent : C.text, marginBottom:'3px' }}>
+                        {lv.label}
+                      </div>
+                      <div style={{ fontSize:'10px', color:C.muted, lineHeight:'1.4' }}>{lv.desc}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Security note */}
+            <p style={{ marginTop:'14px', fontSize:'11px', color:'#aeaeb2', lineHeight:'1.5', textAlign:'center' }}>
+              El LLM solo accede a vectores de los documentos permitidos por esta política.
+              El control se aplica en la capa de datos, no en el modelo.
+            </p>
+
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1133,6 +1999,20 @@ function App() {
   const [page,       setPage]       = useState('chat');
   const [llm,        setLlm]        = useState('claude');
   const [queryStats, setQueryStats] = useState({});
+  const [companies,  setCompanies]  = useState([{ id:'c1', name:'Empresa Demo' }]);
+  const [activeCo,   setActiveCo]   = useState('c1');
+  const [showNewCo,  setShowNewCo]  = useState(false);
+  const [newCoName,  setNewCoName]  = useState('');
+
+  const switchCo = coId => setActiveCo(coId);
+  const createCo = () => {
+    const name = newCoName.trim();
+    if (!name) return;
+    const id = 'c' + Date.now();
+    setCompanies(prev => [...prev, { id, name }]);
+    setActiveCo(id);
+    setNewCoName(''); setShowNewCo(false);
+  };
 
   const toggle   = id => setSelected(prev =>
     prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
@@ -1159,13 +2039,34 @@ function App() {
 
       <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
         <Topbar
-          selected={selected} onRemove={toggle}
-          onClearAll={clearAll}
+          selected={selected} onRemove={toggle} onClearAll={clearAll}
           llm={llm} onLlmChange={setLlm}
+          page={page}
+          companies={companies} activeCo={activeCo} onSwitchCo={switchCo}
+          onNewCo={() => setShowNewCo(true)}
         />
+        {showNewCo && (
+          <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.18)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center' }}
+            onClick={() => setShowNewCo(false)}>
+            <div style={{ background:C.bg, borderRadius:'16px', padding:'28px', width:'340px', boxShadow:'0 8px 40px rgba(0,0,0,0.15)', fontFamily:C.font }}
+              onClick={e => e.stopPropagation()}>
+              <div style={{ fontSize:'15px', fontWeight:600, color:C.text, marginBottom:'16px' }}>Nueva empresa</div>
+              <input type="text" placeholder="Nombre de la empresa…" value={newCoName}
+                onChange={e => setNewCoName(e.target.value)}
+                onKeyDown={e => e.key==='Enter' && createCo()}
+                autoFocus
+                style={{ width:'100%', boxSizing:'border-box', padding:'10px 12px', fontSize:'13px', border:C.border, borderRadius:'8px', outline:'none', fontFamily:C.font, color:C.text }}
+              />
+              <div style={{ display:'flex', gap:'8px', marginTop:'16px', justifyContent:'flex-end' }}>
+                <button onClick={() => setShowNewCo(false)} style={{ padding:'7px 16px', fontSize:'12px', border:C.border, borderRadius:'8px', cursor:'pointer', background:'transparent', fontFamily:C.font }}>Cancel</button>
+                <button onClick={createCo} style={{ padding:'7px 16px', fontSize:'12px', background:C.accent, color:'#fff', border:'none', borderRadius:'8px', cursor:'pointer', fontFamily:C.font, fontWeight:500 }}>Crear</button>
+              </div>
+            </div>
+          </div>
+        )}
         <div style={{ flex:1, display:'flex', overflow:'hidden' }}>
           {page === 'documents' && (
-            <DocumentsPage selected={selected} onToggle={toggle} />
+            <DocumentsPage selected={selected} onToggle={toggle} activeCo={activeCo} companies={companies} />
           )}
           {page === 'visualize' && (
             <VisualizePage selected={selected} onToggle={toggle} />
@@ -1176,10 +2077,10 @@ function App() {
           {page === 'chat' && (
             <ChatPage
               selected={selected} onRemove={toggle}
-              llm={llm} onTrackQuery={trackQuery}
+              llm={llm} onLlmChange={setLlm} onTrackQuery={trackQuery}
             />
           )}
-          {page === 'policies' && <PlaceholderPage title="Policies" />}
+          {page === 'policies' && <PoliciesPage />}
         </div>
       </div>
     </div>
