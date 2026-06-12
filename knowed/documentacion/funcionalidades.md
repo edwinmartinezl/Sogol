@@ -1,4 +1,4 @@
-# Funcionalidades — KnowLayer
+# Funcionalidades — Sogol
 
 ## Sidebar
 
@@ -36,16 +36,29 @@ Solo una sesión puede estar activa a la vez (estado `activeSession` en `Sidebar
 
 ## Topbar
 
+El topbar tiene dos modos según la página activa:
+
+**Modo Documents / Graphs / Visualize / Policies:**
+
 | Condición | Badge |
 |-----------|-------|
 | 0 docs | Sin badge |
 | 1–2 docs | `"N doc(s) selected"` — pill gris |
-| ≥ 3 docs | `"Graph ready · N docs"` — pill naranja con ícono triángulo |
+| ≥ 3 docs | `"Graph ready · N docs"` — pill azul con ícono triángulo |
 
 - Pills individuales con `×` para deseleccionar sin salir de la vista
 - Botón **Clear all** cuando `selected.length >= 2`
-- Selector de modelo LLM — **solo existe dentro del input de Chat** (no aparece en el topbar en ninguna página)
-- Selector de empresa — visible solo en `page === 'documents'` y solo cuando ya existe al menos una empresa (`companies.length > 0`); sin botón `+ New company` (la creación ocurre desde el grid raíz)
+- Selector de empresa — visible siempre que exista al menos una empresa; sin botón `+ New company` (la creación ocurre desde el grid raíz)
+
+**Modo Chat (`page === 'chat'`):**
+
+- Selector de empresa (igual que otras páginas)
+- Chips de contexto inline en la misma barra, scroll horizontal si hay muchos
+- Cada chip: icono tipo + nombre corto + `×` para deseleccionar
+- Estado sin docs: texto "Sin contexto — selecciona docs en Documents"
+- Sin badge de conteo separado — los chips son el contexto visible
+
+Selector de modelo LLM — **solo existe dentro del input de Chat** (no aparece en el topbar).
 
 ## Vista Documents (`/documents`)
 
@@ -63,14 +76,36 @@ La vista navega entre niveles con breadcrumb:
 - **Vista `group`** — tabla de documentos del grupo
 - **Vista `flat`** — tabla plana de todos los docs con columna Location (`Dept › Grupo`)
 
+### Sistema de peso (uso real)
+
+El "peso" de un documento es el número de consultas reales desde el chat en que fue incluido en el contexto.
+
+```js
+const docQ = doc => docStats?.[doc.id]?.queries || 0;
+const maxQ = Math.max(1, ...allDocs.map(docQ));
+const effW = doc => docQ(doc) / maxQ;          // 0–1 para la barra
+const fmtQ = n => n === 0 ? '—'
+  : n >= 1000 ? (n/1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/,'') + 'k'
+  : String(n);
+```
+
+| Elemento | Valor |
+|----------|-------|
+| Barra de progreso | Relativa al doc con más consultas (`effW`) |
+| Color de la barra | `TYPE_COLOR[doc.type]` — por tipo de archivo |
+| Display numérico | `fmtQ`: `—`, `1`, `250`, `1.2k`, `10k` |
+| 100% | El doc con más consultas en la sesión actual |
+
+> El peso es de sesión — no persiste entre recargas.
+
 ### Modos de vista de documentos
 
 El toolbar incluye dos botones (grid / list) que alternan `viewMode`:
 
 | Modo | Descripción |
 |------|-------------|
-| **Grid** (`ti-layout-grid`) | Tarjetas 3 columnas: icono tipo, nombre, área · tamaño, fecha, barra de peso. Checkbox de selección en esquina superior derecha. |
-| **List** (`ti-list`) | Tabla con columnas: checkbox, Name, Type, [Location], Date, Size, Weight, Links, Graphs, Queries. |
+| **Grid** (`ti-layout-grid`) | Tarjetas 3 columnas: icono tipo, nombre, área · tamaño, fecha, barra de uso (color por tipo). Checkbox de selección en esquina superior derecha. |
+| **List** (`ti-list`) | Tabla con columnas: checkbox, Name, Type, [Location], Date, Size, Uso, Links, Graphs, Consultas. |
 
 La vista `flat` (All documents) respeta el modo seleccionado y añade columna Location en modo lista o la muestra dentro de la tarjeta en modo grid.
 
@@ -87,8 +122,10 @@ La vista `flat` (All documents) respeta el modo seleccionado y añade columna Lo
 |--------|-------|----------|
 | Documento | cualquiera | Move to folder, Copy, Add to context, Details, Delete |
 | Carpeta | cualquiera | Rename, Move inside folder, Delete |
-| Espacio en blanco | `all` (raíz) | New folder, New department, Upload document |
-| Espacio en blanco | `dept` / `group` / `flat` | New folder, Upload document |
+| Espacio en blanco | `all` (raíz) | New folder, New department, Upload document, Deseleccionar todo* |
+| Espacio en blanco | `dept` / `group` / `flat` | New folder, Upload document, Deseleccionar todo* |
+
+\* "Deseleccionar todo" solo aparece si `selected.length > 0` (`onlyIfSelected:true`).
 
 **Regla:** "New department" solo aparece en la vista raíz (`all`). Dentro de un departamento o grupo la opción queda oculta — no tiene sentido crear un departamento estando navegando dentro de uno.
 
@@ -235,45 +272,79 @@ El grafo **solo se construye cuando hay 3 o más documentos seleccionados**.
 |--------------------|--------------------|
 | 0 | Ícono + "Selecciona al menos 3 documentos para construir el grafo" |
 | 1–2 | Mismo mensaje + contador "N de 3 seleccionados" |
-| ≥ 3 | Grafo 3D activo |
+| ≥ 3 | Grafo interactivo activo |
 
-- Grafo interactivo (D3 force layout 2D)
-- Incluye tanto documentos mock como documentos reales de SQLite (`allRealDocs` prop desde App)
-- **Nodos**: solo los documentos seleccionados; círculos con radio proporcional al `weight`
+Layout: panel izquierdo (230px) + área principal del grafo.
+
+### Panel izquierdo — grafos guardados
+
+- Lista de grafos guardados (click → carga esa selección)
+- El grafo cuya selección coincide exactamente con `selected` se resalta en azul
+- Cada card: nombre, comentario (si tiene), chips de docs (máx. 4), conteo + fecha
+- Botón ✕ para eliminar un grafo
+- Botón "Guardar grafo (N docs)" en la parte inferior — solo aparece si `selected.length >= 3`
+
+### Modal de guardado (patrón centrado)
+
+Mismo patrón visual que "New folder" / "New department":
+
+```
+┌─────────────────────────────────────┐
+│  Guardar grafo                      │
+│  N documentos · combinación         │
+│                                     │
+│  Nombre                             │
+│  [────────────────────────────]     │
+│                                     │
+│  Comentario (opcional)              │
+│  [────────────────────────────]     │
+│                                     │
+│  [chip1] [chip2] [chip3] ...        │
+│                                     │
+│              [Cancelar] [Guardar]   │
+└─────────────────────────────────────┘
+```
+
+ID único del grafo: `'g' + Date.now()` (timestamp entero).
+
+### Grafo (área principal)
+
+- D3 force layout 2D con canvas (no SVG)
+- **Nodos**: docs seleccionados; círculos con radio proporcional al `weight`
   - Color por tipo: pdf `#ea4335`, xlsx/xls `#34a853`, csv `#34a853`, docx/doc `#4285f4`, txt `#9aa0a6`
-  - Opacidad aumenta con profundidad (efecto 3D)
-  - Anillo azul `#0071e3` en hover
   - Label truncado a 14 chars bajo cada nodo
-- **Aristas**: líneas entre docs co-ocurrentes en `sources` de mensajes AI, filtradas a la selección activa
+- **Aristas**: líneas entre docs con co-ocurrencias en `CHAT_HISTORY`
+  - Fallback `weight:1` si no hay co-ocurrencia — garantiza conectividad total
   - Grosor proporcional al número de co-ocurrencias
-- **Rotación**: drag horizontal → eje Y, drag vertical → eje X (clamped ±1.4 rad)
-- **Auto-rotación**: eje Y a 0.004 rad/frame cuando no hay drag
-- **Click en nodo**: abre modal de detalle del documento
-- **Hover**: tooltip ligero con nombre + "Click para ver detalles"
+- **Animación orbital**: D3 sim corre con `.stop()` + loop manual rAF. Al converger (`alpha < alphaMin`) los nodos pasan a modo órbita — rotación global + deriva individual suave (~40s por vuelta)
+- **Drag durante órbita**: al soltar, posición se reverse-rota para calcular nuevo centro de órbita
+- **Click en nodo**: abre `DocModal` enriquecido con `docStats`
+- **Hover**: tooltip con nombre + "Click para ver detalles"
 - **Header**: `N nodes · N edges` + badge `Graph ready` cuando ≥3 seleccionados
 
 ### Modal de detalle (`DocModal`)
 
-Se abre al hacer click en cualquier nodo del grafo.
+Se abre al hacer click en cualquier nodo.
 
 | Elemento | Descripción |
 |----------|-------------|
 | TypeBadge + nombre | Header del modal |
-| Barra de Weight | Progress bar `0–100%` con color accent |
+| Contador de consultas | Número grande (`18px bold`) + "consultas" — valor real de `docStats` |
+| Barra de uso | Proporcional al doc con más consultas en el grafo activo; color por tipo |
 | Grid 2×3 | Area, Date, Size, Links, Graphs, Queries |
 | "Remove from context" | Deselecciona el doc y cierra el modal |
 | "Close" / Escape / click backdrop | Cierra sin deseleccionar |
 
 ## Vista Chat (`/chat`) — home
 
-- Banda de contexto con pills de documentos activos (deseleccionables con ×)
-- Las pills muestran tanto documentos mock como documentos reales de SQLite (`allDocPool = documents + allRealDocs`)
+- Contexto de documentos activos visible en el **Topbar** (chips inline en la misma barra que el selector de empresa)
+- Fondo animado de red de partículas (canvas rAF independiente, igual que el login)
 - **Estado vacío limpio**: sin mensajes pre-seeded; icono + "Ask anything" + texto contextual según si hay docs en contexto o no
-- Burbujas de chat: user (naranja, derecha) / AI (superficie, izquierda)
+- Burbujas de chat: user (azul, derecha) / AI (superficie, izquierda)
 - Emergent Insight card dentro de burbujas AI cuando hay `msg.insight`
 - Source pills bajo burbujas AI indicando qué documentos se usaron
 - Enter para enviar, Shift+Enter para salto de línea
-- Tracking de `queryStats` por documento en cada envío
+- Al enviar: llama `trackQuery(docIds)` → incrementa `docStats` en App por cada doc en contexto
 - Footer con conteo de contexto y disclaimer de seguridad
 - **Autofocus**: el textarea recibe foco automáticamente al montar la página (`useEffect + inputRef`)
 

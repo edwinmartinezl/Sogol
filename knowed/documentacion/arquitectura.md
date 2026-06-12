@@ -1,4 +1,4 @@
-# Arquitectura — KnowLayer
+# Arquitectura — Sogol
 
 ## Stack técnico
 
@@ -13,19 +13,19 @@
 
 ## Design tokens (`C`)
 
-Paleta inspirada en el hardware Meris LVX — tonos cálidos off-white con acento naranja. Definida como objeto `C` en `app.js`; es la única fuente de verdad de colores — cambiar un token propaga el cambio a toda la UI.
+Paleta inspirada en el hardware Meris LVX — tonos cálidos off-white con acento azul. Definida como objeto `C` en `app.js`; es la única fuente de verdad de colores — cambiar un token propaga el cambio a toda la UI.
 
 | Token | Valor | Uso |
 |-------|-------|-----|
 | `bg` | `#f4f3f1` | Fondo principal (warm off-white) |
 | `surface` | `#eae8e5` | Sidebar, headers, superficies secundarias |
-| `border` | `0.5px solid #c4c0b8` | Separadores y bordes de cards (más oscuro que la paleta Apple anterior) |
+| `border` | `0.5px solid #c4c0b8` | Separadores y bordes de cards |
 | `text` | `#28261f` | Texto principal (carbón cálido) |
 | `muted` | `#8a8780` | Texto secundario y placeholders |
-| `accent` | `#e8561c` | Color de acento (naranja LED) |
+| `accent` | `#2563eb` | Color de acento (azul Sogol) |
 | `font` | SF Pro Text / system-ui | Fuente del sistema |
 
-El acento naranja sustituye al azul Apple en: botones primarios, pills de selección, estados activos en nav, barras de progreso, badges, burbujas de usuario en chat y highlight de sesión activa.
+El acento azul se aplica en: botones primarios, pills de selección, estados activos en nav, barras de progreso, badges, burbujas de usuario en chat y highlight de sesión activa.
 
 ### Variantes de opacidad del acento
 
@@ -88,7 +88,9 @@ CREATE TABLE IF NOT EXISTS files (
   size_bytes    INTEGER NOT NULL,
   dept_id       TEXT,               -- null si sin asignar
   group_id      TEXT,               -- null si sin asignar
-  uploaded_at   TEXT NOT NULL       -- ISO-8601 UTC
+  uploaded_at   TEXT NOT NULL,      -- ISO-8601 UTC
+  vectorized    INTEGER DEFAULT 1,  -- 1 = listo para RAG (siempre en prototipo)
+  chunks        INTEGER DEFAULT 0   -- fragmentos estimados: max(5, floor(size/1000))
 )
 ```
 
@@ -97,13 +99,19 @@ CREATE TABLE IF NOT EXISTS files (
 ```
 DocumentsPage (useEffect[activeCo])
   → apiGetFiles(slug) → GET /api/files
-  → normalizeReal(row) → doc con isReal:true
+  → normalizeReal(row) → doc con isReal:true, vectorized:1, chunks
   → allDocs = [...mockDocs, ...realDocs]
 
-handleCtxAction('upload') / uploadRef.click()
-  → doUpload(file) → apiUpload(file, slug) → POST /api/upload
-  → muestra toast "Uploading…" → "Done — nombre"
+input[file].onChange → setPendingFiles(files)
+  → UploadPreviewModal (previsualización)
+  → confirmar → doUpload(file) → apiUpload → POST /api/upload
+  → VectorizingModal (~4s animación)
   → inserta en realDocs + assign
+
+handleCtxAction('delete') → setDeleteDocId(id)
+  → DeleteDocModal (nivel 1/2/3 según uso)
+  → confirmar → apiDeleteFile(id) → DELETE /api/files/:id
+  → filtra realDocs + assign + selected
 ```
 
 Si el servidor no está corriendo, el `catch` silencia el error — los docs mock siguen apareciendo normalmente.
@@ -122,40 +130,63 @@ Babel intercepta el script y lo compila antes de ejecutarlo.
 
 ```
 knowed/
-├── index.html          — shell HTML con CDN scripts
+├── index.html          — shell HTML con CDN scripts + título "Sogol"
 ├── app.js              — toda la aplicación React (single file)
+├── server.js           — servidor HTTP Node.js + SQLite
+├── knowlayer.db        — SQLite (se crea al primer inicio)
 ├── data/
-│   └── mock.js         — ES module (fuente de verdad para backend futuro)
+│   └── mock.js         — ES module (fuente de verdad para datos de prueba)
 ├── documentacion/
 │   ├── arquitectura.md
 │   ├── funcionalidades.md
 │   └── datos-mock.md
-└── colaboraciones/
-    ├── 001-setup-inicial.md
-    ├── 002-layout-base.md
-    ├── 003-chat-panel.md
-    ├── 004-query-page.md
-    └── 005-graphs-y-documentacion.md
+├── colaboraciones/
+│   ├── 017-rebrand-sogol-login-animaciones.md
+│   ├── 018-weight-real-grafos-guardados-deseleccionar.md
+│   ├── 019-sistema-peso-absoluto.md
+│   └── 020-upload-preview-delete-safe.md
+└── clientes/
+    └── CLI001/empresas/{slug}/files/  — archivos subidos
 ```
 
 ## Flujo de datos
 
 ```
 App (estado global)
-├── selected: string[]      — IDs de documentos activos
-├── page: string            — ruta actual (documents | graphs | chat | policies)
-├── llm: string             — modelo LLM seleccionado
-├── queryStats: Record      — { [docId]: { count, lastAt } }
+├── selected: string[]        — IDs de documentos activos en contexto
+├── page: string              — ruta actual (documents | graphs | chat | policies)
+├── llm: string               — modelo LLM seleccionado
+├── docStats: Record          — { [docId]: { queries: number } } — conteo por sesión
+├── savedGraphs: Graph[]      — [{ id, name, comment, docIds, createdAt }]
 ├── companies: { id, name }[] — lista de empresas
-├── activeCo: string        — ID de empresa activa
-├── showNewCo: boolean      — modal de nueva empresa
-└── newCoName: string       — input del modal
+├── activeCo: string          — ID de empresa activa
+├── showNewCo: boolean        — modal de nueva empresa
+└── newCoName: string         — input del modal
 
-App → Sidebar   (selected, onToggle, page, onNav)
-App → Topbar    (selected, onRemove, onClearAll, llm, onLlmChange, page, companies, activeCo, onSwitchCo, onNewCo)
-App → *Page     (selected, onToggle / onRemove)
-App → DocumentsPage  (activeCo, companies — como props; el estado ya no es local)
+App → Sidebar       (selected, onToggle, page, onNav)
+App → Topbar        (selected, onRemove, onClearAll, page, companies, activeCo,
+                     onSwitchCo, onNewCo, allRealDocs)
+App → DocumentsPage (activeCo, companies, docStats, savedGraphs)
+App → GraphsPage    (selected, docStats, savedGraphs, onSaveGraph, onDeleteGraph,
+                     onLoadGraph, allRealDocs)
+App → ChatPage      (selected, onSend → trackQuery)
 ```
+
+`trackQuery(docIds)` — incrementa `docStats[id].queries` por cada doc en contexto cuando el usuario envía un mensaje real desde el chat:
+
+```js
+const trackQuery = docIds => {
+  setDocStats(prev => {
+    const next = { ...prev };
+    docIds.forEach(id => {
+      next[id] = { queries: (prev[id]?.queries || 0) + 1 };
+    });
+    return next;
+  });
+};
+```
+
+> `docStats` vive en memoria — no persiste entre recargas. Para persistencia futura: `localStorage` o columna en `files`.
 
 ### Por qué `companies`/`activeCo` viven en App
 
