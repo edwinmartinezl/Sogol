@@ -556,10 +556,10 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
 
   const allDocs      = [...documents, ...realDocs];
   const q            = search.toLowerCase();
-  const effW = doc => {
-    const q = docStats?.[doc.id]?.queries || 0;
-    return q > 0 ? Math.min(1, q / 10) : doc.weight;
-  };
+  const docQ  = doc => docStats?.[doc.id]?.queries || 0;
+  const maxQ  = Math.max(1, ...allDocs.map(docQ));
+  const effW  = doc => docQ(doc) / maxQ;
+  const fmtQ  = n => n === 0 ? '—' : n >= 1000 ? (n/1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/,'')+'k' : String(n);
   const docsForGroup = gId => allDocs.filter(d => assign[d.id]?.groupId === gId);
   const docsForDept  = dId => allDocs.filter(d => assign[d.id]?.deptId  === dId);
   const docsLoose    = dId => docsForDept(dId).filter(d => !assign[d.id]?.groupId);
@@ -684,7 +684,10 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
       if (doc?.isReal && doc?.type === 'pdf') onGoVisualize?.(doc);
     } else if (action === 'details') {
       const doc = [...documents, ...realDocs].find(d => d.id === targetId);
-      if (doc) setModalDoc(doc);
+      if (doc) {
+        const q = docStats?.[doc.id]?.queries || 0;
+        setModalDoc({ ...doc, queries: q, weight: q / maxQ });
+      }
     } else if (action === 'move') {
       setMoveDocId(targetId);
     } else if (action === 'clearall') {
@@ -753,11 +756,11 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
         <td style={{ padding:'9px 12px', color:C.muted }}>{doc.date}</td>
         <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{fmtSize(doc.size)}</td>
         <td style={{ padding:'9px 12px', textAlign:'right' }}>
-          {(() => { const w=effW(doc); return <span style={{ color:w>=0.9?'#1a7a4a':w>=0.7?C.text:C.muted }}>{(w*100).toFixed(0)}%</span>; })()}
+          <span style={{ color: docQ(doc)>0 ? C.text : C.muted, fontVariantNumeric:'tabular-nums' }}>{fmtQ(docQ(doc))}</span>
         </td>
         <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{doc.links}</td>
         <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{doc.graphs}</td>
-        <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{docStats?.[doc.id]?.queries || doc.queries}</td>
+        <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{fmtQ(docQ(doc))}</td>
       </tr>
     );
   };
@@ -828,7 +831,7 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
     viewMode === 'grid' ? renderCards(docs, showLoc) : renderTable(docs, showLoc);
 
   const renderTable = (docs, showLoc = false) => {
-    const heads   = ['','Name','Type',...(showLoc?['Location']:[]),'Date','Size','Weight','Links','Graphs','Queries'];
+    const heads   = ['','Name','Type',...(showLoc?['Location']:[]),'Date','Size','Uso','Links','Graphs','Consultas'];
     const rightAt = showLoc ? 4 : 3;
     return (
       <div style={{ border:C.border, borderRadius:'10px', overflow:'hidden', background:C.bg }}>
@@ -1791,13 +1794,14 @@ function DocModal({ doc, onClose, onRemove }) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  const fmtQ = n => n >= 1000 ? (n/1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/,'')+'k' : String(n||0);
   const rows = [
-    { label:'Area',    value: doc.area },
-    { label:'Date',    value: doc.date },
-    { label:'Size',    value: fmtSize(doc.size) },
-    { label:'Links',   value: doc.links },
-    { label:'Graphs',  value: doc.graphs },
-    { label:'Queries', value: doc.queries },
+    { label:'Area',       value: doc.area },
+    { label:'Date',       value: doc.date },
+    { label:'Size',       value: fmtSize(doc.size) },
+    { label:'Links',      value: doc.links },
+    { label:'Graphs',     value: doc.graphs },
+    { label:'Consultas',  value: fmtQ(doc.queries) },
   ];
 
   return (
@@ -1834,18 +1838,21 @@ function DocModal({ doc, onClose, onRemove }) {
           </button>
         </div>
 
-        {/* Weight bar */}
+        {/* Usage bar */}
         <div style={{ marginBottom:'16px' }}>
-          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'5px' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:'5px' }}>
             <span style={{ fontSize:'10px', fontWeight:600, color:C.muted, textTransform:'uppercase', letterSpacing:'0.5px' }}>
-              Weight
+              Uso
             </span>
-            <span style={{ fontSize:'12px', fontWeight:600, color:C.text }}>
-              {(doc.weight * 100).toFixed(0)}%
-            </span>
+            <div style={{ display:'flex', alignItems:'baseline', gap:'4px' }}>
+              <span style={{ fontSize:'18px', fontWeight:700, color:C.text, fontVariantNumeric:'tabular-nums' }}>
+                {fmtQ(doc.queries)}
+              </span>
+              <span style={{ fontSize:'11px', color:C.muted }}>consultas</span>
+            </div>
           </div>
           <div style={{ height:'5px', background:C.surface, borderRadius:'3px', overflow:'hidden' }}>
-            <div style={{ width:`${doc.weight * 100}%`, height:'100%', background:C.accent, borderRadius:'3px' }} />
+            <div style={{ width:`${(doc.weight||0) * 100}%`, height:'100%', background: TYPE_COLOR[doc.type]||C.accent, borderRadius:'3px' }} />
           </div>
         </div>
 
@@ -2147,8 +2154,13 @@ function GraphsPage({ selected, onToggle, allRealDocs, docStats, savedGraphs, on
 
   useEffect(() => { toggleRef.current = onToggle; }, [onToggle]);
 
-  // Updated every render — opens modal with clean doc data
-  clickRef.current = d => setModalDoc(allPool.find(doc => doc.id === d.id) || d);
+  // Updated every render — opens modal with real usage data
+  clickRef.current = d => {
+    const base = allPool.find(doc => doc.id === d.id) || d;
+    const q    = docStats?.[base.id]?.queries || 0;
+    const maxQ = Math.max(1, ...selected.map(id => docStats?.[id]?.queries || 0));
+    setModalDoc({ ...base, queries: q, weight: q / maxQ });
+  };
 
   useEffect(() => {
     const svgEl = svgRef.current;
