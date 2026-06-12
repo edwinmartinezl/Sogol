@@ -2607,10 +2607,87 @@ function PoliciesPage() {
 // ── Login page ────────────────────────────────────────────────────────────────
 
 function LoginPage({ onLogin }) {
-  const canvasRef = useRef(null);
-  const animRef   = useRef(null);
+  const canvasRef   = useRef(null);
+  const animRef     = useRef(null);
+  const bgCanvasRef = useRef(null);
+  const bgAnimRef   = useRef(null);
   const [phase, setPhase] = useState('forming'); // 'forming' | 'ready' | 'exit'
 
+  // ── Background particle network ──────────────────────────────────────────────
+  useEffect(() => {
+    const canvas = bgCanvasRef.current;
+    if (!canvas) return;
+    const W = canvas.width  = window.innerWidth;
+    const H = canvas.height = window.innerHeight;
+    const ctx = canvas.getContext('2d');
+
+    const PALETTE = [
+      [37,  99,  235],  // blue-600
+      [99,  102, 241],  // indigo-500
+      [100, 116, 139],  // slate-500
+      [59,  130, 246],  // blue-400
+      [71,  85,  105],  // slate-600
+      [148, 163, 184],  // slate-400
+    ];
+
+    const N   = Math.max(55, Math.floor(W * H / 13000));
+    const pts = Array.from({ length: N }, () => {
+      const [r, g, b] = PALETTE[Math.floor(Math.random() * PALETTE.length)];
+      return {
+        x:  Math.random() * W,
+        y:  Math.random() * H,
+        vx: (Math.random() - 0.5) * 0.48,
+        vy: (Math.random() - 0.5) * 0.48,
+        radius: 1.4 + Math.random() * 1.8,
+        alpha:  0.16 + Math.random() * 0.22,
+        cr: r, cg: g, cb: b,
+      };
+    });
+
+    const MAX_DIST = 155;
+
+    const loop = () => {
+      ctx.clearRect(0, 0, W, H);
+
+      for (const p of pts) {
+        p.x += p.vx; p.y += p.vy;
+        if (p.x < 0)  { p.x = 0;  p.vx *= -1; }
+        if (p.x > W)  { p.x = W;  p.vx *= -1; }
+        if (p.y < 0)  { p.y = 0;  p.vy *= -1; }
+        if (p.y > H)  { p.y = H;  p.vy *= -1; }
+      }
+
+      ctx.lineWidth = 0.75;
+      for (let i = 0; i < pts.length; i++) {
+        for (let j = i + 1; j < pts.length; j++) {
+          const dx   = pts[i].x - pts[j].x;
+          const dy   = pts[i].y - pts[j].y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < MAX_DIST) {
+            const a = ((1 - dist / MAX_DIST) * 0.11).toFixed(3);
+            ctx.strokeStyle = `rgba(37,99,235,${a})`;
+            ctx.beginPath();
+            ctx.moveTo(pts[i].x, pts[i].y);
+            ctx.lineTo(pts[j].x, pts[j].y);
+            ctx.stroke();
+          }
+        }
+      }
+
+      for (const p of pts) {
+        ctx.fillStyle = `rgba(${p.cr},${p.cg},${p.cb},${p.alpha})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      bgAnimRef.current = requestAnimationFrame(loop);
+    };
+    bgAnimRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(bgAnimRef.current);
+  }, []);
+
+  // ── Sogol text particle animation ────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -2686,7 +2763,13 @@ function LoginPage({ onLogin }) {
       transform: phase === 'exit' ? 'translateY(-100vh)' : 'translateY(0)',
       transition: phase === 'exit' ? 'transform 0.65s cubic-bezier(0.4,0,0.6,1)' : 'none',
     }}>
-      {/* Canvas: particle animation — fades out once settled */}
+      {/* Background: infinite particle network */}
+      <canvas ref={bgCanvasRef} style={{
+        display:'block', position:'absolute', inset:0, width:'100%', height:'100%',
+        pointerEvents:'none',
+      }} />
+
+      {/* Canvas: Sogol text particle animation — fades out once settled */}
       <canvas ref={canvasRef} style={{
         display:'block', position:'absolute', inset:0, width:'100%', height:'100%',
         opacity: phase === 'forming' ? 1 : 0,
