@@ -486,6 +486,8 @@ const CTX_ITEMS = {
     { icon:'ti-folder-plus',     label:'New folder',        action:'newfolder'  },
     { icon:'ti-building',        label:'New department',    action:'newdept'    },
     { icon:'ti-upload',          label:'Upload document',   action:'upload'     },
+    { sep:true },
+    { icon:'ti-checkbox',        label:'Deseleccionar todo', action:'clearall', onlyIfSelected:true },
   ],
   blank_inner: [
     { icon:'ti-folder-plus',     label:'New folder',        action:'newfolder'  },
@@ -496,7 +498,10 @@ const CTX_ITEMS = {
 function ContextMenu({ menu, onClose, onAction }) {
   if (!menu.visible) return null;
   const allItems = CTX_ITEMS[menu.type] || [];
-  const items    = allItems.filter(item => !item.onlyRealPdf || menu.docIsRealPdf);
+  const items    = allItems.filter(item =>
+    (!item.onlyRealPdf  || menu.docIsRealPdf) &&
+    (!item.onlyIfSelected || menu.hasSelected)
+  );
   const flipX    = menu.x + 196 > window.innerWidth;
   const flipY   = menu.y + items.length * 32 + 24 > window.innerHeight;
   return (
@@ -529,7 +534,7 @@ function ContextMenu({ menu, onClose, onAction }) {
 
 // ── Documents page ────────────────────────────────────────────────────────────
 
-function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, onNewCo, onSwitchCo, search, onSearch, viewMode, onViewMode, onGlobalToast, onGoVisualize, onRealDocsChange }) {
+function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, onNewCo, onSwitchCo, search, onSearch, viewMode, onViewMode, onGlobalToast, onGoVisualize, onRealDocsChange, docStats }) {
   const [nav,         setNav]         = useState({ view:'all', deptId:null, groupId:null });
   const [assign,      setAssign]      = useState(TREE.docAssignments);
   const [groups,      setGroups]      = useState([...TREE.groups]);
@@ -545,10 +550,16 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
   const [realDocs,      setRealDocs]      = useState([]);
   const [toast,         setToast]         = useState(null);
   const [vecModal,      setVecModal]      = useState(null); // { file, resultReady, result, error }
+  const [modalDoc,      setModalDoc]      = useState(null);
+  const [moveDocId,     setMoveDocId]     = useState(null);
   const uploadRef = useRef(null);
 
   const allDocs      = [...documents, ...realDocs];
   const q            = search.toLowerCase();
+  const effW = doc => {
+    const q = docStats?.[doc.id]?.queries || 0;
+    return q > 0 ? Math.min(1, q / 10) : doc.weight;
+  };
   const docsForGroup = gId => allDocs.filter(d => assign[d.id]?.groupId === gId);
   const docsForDept  = dId => allDocs.filter(d => assign[d.id]?.deptId  === dId);
   const docsLoose    = dId => docsForDept(dId).filter(d => !assign[d.id]?.groupId);
@@ -562,7 +573,7 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
     e.preventDefault(); e.stopPropagation();
     const allD = [...documents, ...realDocs];
     const doc  = type === 'doc' ? allD.find(d => d.id === targetId) : null;
-    setCtxMenu({ visible:true, x:e.clientX, y:e.clientY, type, targetId, docIsRealPdf: !!(doc?.isReal && doc?.type === 'pdf') });
+    setCtxMenu({ visible:true, x:e.clientX, y:e.clientY, type, targetId, docIsRealPdf: !!(doc?.isReal && doc?.type === 'pdf'), hasSelected: selected.length > 0 });
   };
   const clearDrag = () => { setDragDocId(null); setDragGroupId(null); setDragOverId(null); };
 
@@ -671,8 +682,13 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
     } else if (action === 'viewpdf') {
       const doc = [...documents, ...realDocs].find(d => d.id === targetId);
       if (doc?.isReal && doc?.type === 'pdf') onGoVisualize?.(doc);
-    } else {
-      console.log('[CTX]', action, targetId);
+    } else if (action === 'details') {
+      const doc = [...documents, ...realDocs].find(d => d.id === targetId);
+      if (doc) setModalDoc(doc);
+    } else if (action === 'move') {
+      setMoveDocId(targetId);
+    } else if (action === 'clearall') {
+      onClearAll?.();
     }
   };
 
@@ -737,13 +753,11 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
         <td style={{ padding:'9px 12px', color:C.muted }}>{doc.date}</td>
         <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{fmtSize(doc.size)}</td>
         <td style={{ padding:'9px 12px', textAlign:'right' }}>
-          <span style={{ color:doc.weight>=0.9?'#1a7a4a':doc.weight>=0.7?C.text:C.muted }}>
-            {(doc.weight*100).toFixed(0)}%
-          </span>
+          {(() => { const w=effW(doc); return <span style={{ color:w>=0.9?'#1a7a4a':w>=0.7?C.text:C.muted }}>{(w*100).toFixed(0)}%</span>; })()}
         </td>
         <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{doc.links}</td>
         <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{doc.graphs}</td>
-        <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{doc.queries}</td>
+        <td style={{ padding:'9px 12px', color:C.muted, textAlign:'right' }}>{docStats?.[doc.id]?.queries || doc.queries}</td>
       </tr>
     );
   };
@@ -792,8 +806,8 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
         {showLoc && <div style={{ fontSize:'11px', color:C.muted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }} title={loc}>{loc}</div>}
         <div style={{ fontSize:'11px', color:C.muted }}>{doc.date}</div>
         <div style={{ height:'2px', background:'#e5e5ea', borderRadius:'2px', overflow:'hidden', marginTop:'1px' }}>
-          <div style={{ height:'100%', width:(doc.weight*100)+'%', borderRadius:'2px',
-            background: doc.weight>=0.9?'#1a7a4a':doc.weight>=0.7?C.accent:'#f0a830' }} />
+          <div style={{ height:'100%', width:(effW(doc)*100)+'%', borderRadius:'2px',
+            background: TYPE_COLOR[doc.type] || C.accent }} />
         </div>
       </div>
     );
@@ -856,7 +870,112 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
   let content;
 
   if (nav.view === 'flat') {
-    content = renderDocs(allDocs.filter(d => !q || d.name.toLowerCase().includes(q)), true);
+    const filt = d => !q || d.name.toLowerCase().includes(q);
+    const unassigned = allDocs.filter(d => !assign[d.id]?.deptId && filt(d));
+
+    const DeptHeader = ({ dept }) => (
+      <div style={{
+        display:'flex', alignItems:'center', gap:'10px',
+        padding:'10px 0 10px', marginBottom:'4px',
+        borderBottom:'2px solid '+C.accent+'30',
+      }}>
+        <div style={{
+          width:'32px', height:'32px', borderRadius:'8px',
+          background:C.accent+'12', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0,
+        }}>
+          <i className={'ti '+(dept.icon||'ti-building')} style={{ fontSize:'16px', color:C.accent }} />
+        </div>
+        <span style={{ fontSize:'16px', fontWeight:700, color:C.text, letterSpacing:'-0.2px' }}>{dept.name}</span>
+        <span style={{
+          fontSize:'10px', color:C.muted, background:C.surface,
+          borderRadius:'20px', padding:'2px 8px', fontWeight:600,
+        }}>{docsForDept(dept.id).filter(filt).length}</span>
+      </div>
+    );
+
+    const GroupHeader = ({ grp, count }) => (
+      <div style={{
+        display:'flex', alignItems:'center', gap:'7px',
+        padding:'8px 0 6px', marginTop:'12px', marginBottom:'2px',
+      }}>
+        <i className="ti ti-folder-filled" style={{ fontSize:'14px', color:'#92400e' }} />
+        <span style={{ fontSize:'12px', fontWeight:600, color:'#78350f', textTransform:'uppercase', letterSpacing:'0.5px' }}>{grp.name}</span>
+        <span style={{
+          fontSize:'10px', color:C.muted, background:C.surface,
+          borderRadius:'20px', padding:'1px 6px', fontWeight:600,
+        }}>{count}</span>
+      </div>
+    );
+
+    const sectionDepts = departments.filter(dep => {
+      if (docsForDept(dep.id).filter(filt).length > 0) return true;
+      if (!q) return true;
+      return false;
+    });
+
+    content = (
+      <div style={{ display:'flex', flexDirection:'column', gap:'28px' }}>
+        {sectionDepts.map(dept => {
+          const deptGroups = groups.filter(g => g.deptId === dept.id);
+          const deptGroupsWithDocs = deptGroups.filter(g => docsForGroup(g.id).filter(filt).length > 0);
+          const loose = docsLoose(dept.id).filter(filt);
+          if (q && deptGroupsWithDocs.length === 0 && loose.length === 0) return null;
+          return (
+            <div key={dept.id}>
+              <DeptHeader dept={dept} />
+              {deptGroupsWithDocs.map(grp => {
+                const grpDocs = docsForGroup(grp.id).filter(filt);
+                return (
+                  <div key={grp.id} style={{ marginLeft:'16px' }}>
+                    <GroupHeader grp={grp} count={grpDocs.length} />
+                    <div style={{ marginLeft:'4px' }}>{renderDocs(grpDocs, false)}</div>
+                  </div>
+                );
+              })}
+              {loose.length > 0 && (
+                <div style={{ marginLeft:'16px' }}>
+                  {deptGroupsWithDocs.length > 0 && (
+                    <div style={{ display:'flex', alignItems:'center', gap:'7px', padding:'8px 0 6px', marginTop:'12px', marginBottom:'2px' }}>
+                      <i className="ti ti-folder" style={{ fontSize:'14px', color:C.muted }} />
+                      <span style={{ fontSize:'12px', fontWeight:600, color:C.muted, textTransform:'uppercase', letterSpacing:'0.5px' }}>Sin carpeta</span>
+                      <span style={{ fontSize:'10px', color:C.muted, background:C.surface, borderRadius:'20px', padding:'1px 6px', fontWeight:600 }}>{loose.length}</span>
+                    </div>
+                  )}
+                  <div style={{ marginLeft:'4px' }}>{renderDocs(loose, false)}</div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {unassigned.length > 0 && (
+          <div>
+            <div style={{
+              display:'flex', alignItems:'center', gap:'10px',
+              padding:'10px 0 10px', marginBottom:'4px',
+              borderBottom:'2px solid #c4c0b830',
+            }}>
+              <div style={{
+                width:'32px', height:'32px', borderRadius:'8px',
+                background:C.surface, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0,
+              }}>
+                <i className="ti ti-inbox" style={{ fontSize:'16px', color:C.muted }} />
+              </div>
+              <span style={{ fontSize:'16px', fontWeight:700, color:C.muted }}>Sin departamento</span>
+              <span style={{ fontSize:'10px', color:C.muted, background:C.surface, borderRadius:'20px', padding:'2px 8px', fontWeight:600 }}>{unassigned.length}</span>
+            </div>
+            {renderDocs(unassigned, false)}
+          </div>
+        )}
+
+        {sectionDepts.length === 0 && unassigned.length === 0 && (
+          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'200px', gap:'8px', color:C.muted }}>
+            <i className="ti ti-files-off" style={{ fontSize:'32px' }} />
+            <span style={{ fontSize:'13px' }}>No hay documentos{q ? ` para "${q}"` : ''}</span>
+          </div>
+        )}
+      </div>
+    );
   }
   else if (nav.view === 'all') {
     if (!activeCo) {
@@ -1116,6 +1235,16 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
         {/* Right: doc count + search + view toggles */}
         {activeCo && (
           <>
+            {selected.length > 0 && (
+              <button onClick={onClearAll} style={{
+                display:'flex', alignItems:'center', gap:'5px', padding:'5px 10px',
+                fontSize:'11px', fontWeight:600, border:C.border, borderRadius:'7px',
+                background:C.surface, color:C.muted, cursor:'pointer', fontFamily:C.font, flexShrink:0,
+              }}>
+                <i className="ti ti-square-x" style={{ fontSize:'12px' }} />
+                {selected.length} seleccionado{selected.length!==1?'s':''} · Deseleccionar
+              </button>
+            )}
             <span style={{ fontSize:'11px', color:C.muted, flexShrink:0 }}>{allDocs.length} docs</span>
             <div style={{ position:'relative', flexShrink:0 }}>
               <i className="ti ti-search" style={{ position:'absolute', left:'8px', top:'50%', transform:'translateY(-50%)', fontSize:'12px', color:C.muted, pointerEvents:'none' }} />
@@ -1212,6 +1341,110 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
         />
       )}
 
+      {/* Details modal */}
+      {modalDoc && (
+        <DocModal doc={modalDoc} onClose={() => setModalDoc(null)} onRemove={onToggle} />
+      )}
+
+      {/* Move to folder modal */}
+      {moveDocId && (
+        <MoveToModal
+          doc={[...documents, ...realDocs].find(d => d.id === moveDocId)}
+          departments={departments}
+          groups={groups}
+          currentAssign={assign[moveDocId]}
+          onMove={(deptId, groupId) => {
+            setAssign(prev => ({ ...prev, [moveDocId]: { deptId, groupId } }));
+            apiMoveFile(moveDocId, deptId, groupId).catch(() => {});
+            setMoveDocId(null);
+          }}
+          onClose={() => setMoveDocId(null)}
+        />
+      )}
+
+    </div>
+  );
+}
+
+// ── Move to modal ──────────────────────────────────────────────────────────────
+
+function MoveToModal({ doc, departments, groups, currentAssign, onMove, onClose }) {
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  if (!doc) return null;
+
+  return (
+    <div onClick={onClose} style={{
+      position:'fixed', inset:0, background:'rgba(0,0,0,0.18)', zIndex:2000,
+      display:'flex', alignItems:'center', justifyContent:'center', fontFamily:C.font,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background:C.bg, borderRadius:'16px', padding:'24px', width:'360px',
+        maxHeight:'70vh', display:'flex', flexDirection:'column',
+        boxShadow:'0 20px 60px rgba(0,0,0,0.14)', border:C.border,
+      }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'16px' }}>
+          <div>
+            <div style={{ fontSize:'14px', fontWeight:600, color:C.text }}>Mover documento</div>
+            <div style={{ fontSize:'11px', color:C.muted, marginTop:'2px', maxWidth:'260px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{doc.name}</div>
+          </div>
+          <button onClick={onClose} style={{ width:'28px', height:'28px', borderRadius:'8px', border:C.border, background:C.surface, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', color:C.muted, flexShrink:0 }}>
+            <i className="ti ti-x" style={{ fontSize:'13px' }} />
+          </button>
+        </div>
+
+        <div style={{ overflowY:'auto', flex:1, display:'flex', flexDirection:'column', gap:'4px' }}>
+          {/* Sin departamento */}
+          <button onClick={() => onMove(null, null)} style={{
+            display:'flex', alignItems:'center', gap:'8px', padding:'8px 10px',
+            borderRadius:'8px', border: !currentAssign?.deptId ? '1px solid '+C.accent : C.border,
+            background: !currentAssign?.deptId ? C.accent+'0e' : 'transparent',
+            cursor:'pointer', textAlign:'left', fontFamily:C.font, width:'100%',
+          }}>
+            <i className="ti ti-inbox" style={{ fontSize:'14px', color:C.muted }} />
+            <span style={{ fontSize:'12px', color:C.muted, fontWeight:500 }}>Sin departamento</span>
+          </button>
+
+          {departments.map(dept => {
+            const deptGroups = groups.filter(g => g.deptId === dept.id);
+            const isInDept = currentAssign?.deptId === dept.id;
+            return (
+              <div key={dept.id}>
+                {/* Dept row — move to dept root (no group) */}
+                <button onClick={() => onMove(dept.id, null)} style={{
+                  display:'flex', alignItems:'center', gap:'8px', padding:'8px 10px',
+                  borderRadius:'8px', border: isInDept && !currentAssign?.groupId ? '1px solid '+C.accent : C.border,
+                  background: isInDept && !currentAssign?.groupId ? C.accent+'0e' : 'transparent',
+                  cursor:'pointer', textAlign:'left', fontFamily:C.font, width:'100%', marginTop:'2px',
+                }}>
+                  <i className={'ti '+(dept.icon||'ti-building')} style={{ fontSize:'14px', color:C.accent }} />
+                  <span style={{ fontSize:'12px', fontWeight:600, color:C.text }}>{dept.name}</span>
+                </button>
+
+                {/* Groups within dept */}
+                {deptGroups.map(grp => {
+                  const isHere = currentAssign?.deptId === dept.id && currentAssign?.groupId === grp.id;
+                  return (
+                    <button key={grp.id} onClick={() => onMove(dept.id, grp.id)} style={{
+                      display:'flex', alignItems:'center', gap:'8px', padding:'7px 10px 7px 28px',
+                      borderRadius:'8px', border: isHere ? '1px solid '+C.accent : 'transparent',
+                      background: isHere ? C.accent+'0e' : 'transparent',
+                      cursor:'pointer', textAlign:'left', fontFamily:C.font, width:'100%',
+                    }}>
+                      <i className="ti ti-folder-filled" style={{ fontSize:'12px', color:'#92400e' }} />
+                      <span style={{ fontSize:'12px', color:C.muted, fontWeight:500 }}>{grp.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1225,13 +1458,83 @@ function ChatPage({ selected, onRemove, llm, onLlmChange, onTrackQuery, companie
   const [showUploadDest, setShowUploadDest] = useState(false);
   const [uploadDest,    setUploadDest]    = useState(null);
   const [chatVecModal,  setChatVecModal]  = useState(null);
-  const bottomRef  = useRef(null);
-  const fileRef    = useRef(null);
-  const inputRef   = useRef(null);
+  const bottomRef       = useRef(null);
+  const fileRef         = useRef(null);
+  const inputRef        = useRef(null);
+  const bgChatCanvasRef = useRef(null);
+  const bgChatAnimRef   = useRef(null);
 
   const allDocPool = [...documents, ...(allRealDocs||[])];
 
   useEffect(() => { inputRef.current?.focus(); }, []);
+
+  useEffect(() => {
+    const canvas = bgChatCanvasRef.current;
+    if (!canvas) return;
+    const parent = canvas.parentElement;
+    const resize = () => {
+      canvas.width  = parent.offsetWidth;
+      canvas.height = parent.offsetHeight;
+    };
+    resize();
+    const W = () => canvas.width;
+    const H = () => canvas.height;
+    const ctx = canvas.getContext('2d');
+
+    const PALETTE = [
+      [37,  99,  235],
+      [99,  102, 241],
+      [100, 116, 139],
+      [59,  130, 246],
+      [71,  85,  105],
+      [148, 163, 184],
+    ];
+
+    const makeParticles = () => {
+      const n = Math.max(40, Math.floor(W() * H() / 13000));
+      return Array.from({ length: n }, () => {
+        const [r, g, b] = PALETTE[Math.floor(Math.random() * PALETTE.length)];
+        return {
+          x: Math.random() * W(), y: Math.random() * H(),
+          vx: (Math.random() - 0.5) * 0.48,
+          vy: (Math.random() - 0.5) * 0.48,
+          radius: 1.4 + Math.random() * 1.8,
+          alpha:  0.16 + Math.random() * 0.22,
+          cr: r, cg: g, cb: b,
+        };
+      });
+    };
+    let pts = makeParticles();
+
+    const loop = () => {
+      ctx.clearRect(0, 0, W(), H());
+      for (const p of pts) {
+        p.x += p.vx; p.y += p.vy;
+        if (p.x < 0)    { p.x = 0;    p.vx *= -1; }
+        if (p.x > W())  { p.x = W();  p.vx *= -1; }
+        if (p.y < 0)    { p.y = 0;    p.vy *= -1; }
+        if (p.y > H())  { p.y = H();  p.vy *= -1; }
+      }
+      ctx.lineWidth = 0.75;
+      for (let i = 0; i < pts.length; i++) {
+        for (let j = i + 1; j < pts.length; j++) {
+          const dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y;
+          const dist = Math.sqrt(dx*dx + dy*dy);
+          if (dist < 155) {
+            ctx.strokeStyle = `rgba(37,99,235,${((1 - dist/155)*0.11).toFixed(3)})`;
+            ctx.beginPath(); ctx.moveTo(pts[i].x, pts[i].y); ctx.lineTo(pts[j].x, pts[j].y); ctx.stroke();
+          }
+        }
+      }
+      for (const p of pts) {
+        ctx.fillStyle = `rgba(${p.cr},${p.cg},${p.cb},${p.alpha})`;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.radius, 0, Math.PI*2); ctx.fill();
+      }
+      bgChatAnimRef.current = requestAnimationFrame(loop);
+    };
+    bgChatAnimRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(bgChatAnimRef.current);
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior:'smooth' });
@@ -1260,8 +1563,11 @@ function ChatPage({ selected, onRemove, llm, onLlmChange, onTrackQuery, companie
   return (
     <div style={{
       flex:1, display:'flex', flexDirection:'column', overflow:'hidden',
-      background:C.bg, fontFamily:C.font,
+      background:C.bg, fontFamily:C.font, position:'relative',
     }}>
+      <canvas ref={bgChatCanvasRef} style={{
+        position:'absolute', inset:0, width:'100%', height:'100%', pointerEvents:'none',
+      }} />
       {/* Context band */}
       <div style={{
         padding:'8px 20px', borderBottom:C.border, flexShrink:0,
@@ -1825,14 +2131,17 @@ function UploadDestModal({ companies, activeCo, onConfirm, onClose }) {
 
 // ── Graphs page (D3 force layout 2D) ─────────────────────────────────────────
 
-function GraphsPage({ selected, onToggle, allRealDocs }) {
+function GraphsPage({ selected, onToggle, allRealDocs, docStats, savedGraphs, onSaveGraph, onDeleteGraph, onLoadGraph }) {
   const svgRef       = useRef(null);
   const simRef       = useRef(null);
   const animFrameRef = useRef(null);
   const toggleRef    = useRef(onToggle);
   const clickRef     = useRef(null);
-  const [tip,      setTip]      = useState(null);
-  const [modalDoc, setModalDoc] = useState(null);
+  const [tip,        setTip]        = useState(null);
+  const [modalDoc,   setModalDoc]   = useState(null);
+  const [showSave,   setShowSave]   = useState(false);
+  const [saveName,   setSaveName]   = useState('');
+  const [saveComment,setSaveComment]= useState('');
 
   const allPool = [...documents, ...(allRealDocs||[])];
 
@@ -2020,53 +2329,198 @@ function GraphsPage({ selected, onToggle, allRealDocs }) {
   const n  = selected.length;
   const ec = n >= 2 ? n * (n - 1) / 2 : 0;
 
+  const pool    = [...documents, ...(allRealDocs||[])];
+  const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('es', { day:'2-digit', month:'short', year:'numeric' }) : '';
+
   return (
-    <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', fontFamily:C.font }}>
-      <div style={{ flex:1, position:'relative', overflow:'hidden', background:C.bg }}>
-        {n < 3 && (
-          <div style={{
-            position:'absolute', inset:0, zIndex:1, pointerEvents:'none',
-            display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
-            gap:'10px',
-          }}>
-            <i className="ti ti-circles-relation" style={{ fontSize:'42px', color:'#e0e0e5' }} />
-            <span style={{ fontSize:'13px', color:C.muted }}>
-              Selecciona al menos 3 documentos para construir el grafo
-            </span>
-            {n > 0 && (
-              <span style={{ fontSize:'11px', color:'#c7c7cc' }}>
-                {n} de 3 seleccionado{n !== 1 ? 's' : ''}
+    <div style={{ flex:1, display:'flex', overflow:'hidden', fontFamily:C.font }}>
+
+      {/* ── Saved graphs panel ── */}
+      <div style={{
+        width:'230px', flexShrink:0, borderRight:C.border, background:C.surface,
+        display:'flex', flexDirection:'column', overflow:'hidden',
+      }}>
+        <div style={{ padding:'14px 16px 10px', borderBottom:C.border, flexShrink:0 }}>
+          <div style={{ fontSize:'11px', fontWeight:700, color:C.muted, textTransform:'uppercase', letterSpacing:'0.6px' }}>
+            Grafos guardados
+          </div>
+        </div>
+
+        <div style={{ flex:1, overflowY:'auto', padding:'8px' }}>
+          {(savedGraphs||[]).length === 0 ? (
+            <div style={{ padding:'24px 8px', textAlign:'center' }}>
+              <i className="ti ti-circles-relation" style={{ fontSize:'28px', color:'#ddd', display:'block', marginBottom:'8px' }} />
+              <div style={{ fontSize:'11px', color:C.muted, lineHeight:1.5 }}>
+                Selecciona ≥3 docs y guarda combinaciones aquí
+              </div>
+            </div>
+          ) : (savedGraphs||[]).map(g => {
+            const docs = g.docIds.map(id => pool.find(d => d.id === id)).filter(Boolean);
+            const isActive = g.docIds.length === selected.length && g.docIds.every(id => selected.includes(id));
+            return (
+              <div key={g.id} style={{
+                borderRadius:'10px', padding:'10px', marginBottom:'4px', cursor:'pointer',
+                border: isActive ? '1px solid '+C.accent+'60' : C.border,
+                background: isActive ? C.accent+'08' : C.bg,
+                transition:'background .15s',
+              }} onClick={() => onLoadGraph?.(g.docIds)}>
+                <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:'4px' }}>
+                  <div style={{ fontSize:'12px', fontWeight:600, color:C.text, lineHeight:1.3, flex:1 }}>{g.name}</div>
+                  <button onClick={e => { e.stopPropagation(); onDeleteGraph?.(g.id); }} style={{
+                    width:'18px', height:'18px', borderRadius:'4px', border:'none', background:'transparent',
+                    cursor:'pointer', color:C.muted, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, padding:0,
+                  }}>
+                    <i className="ti ti-x" style={{ fontSize:'10px' }} />
+                  </button>
+                </div>
+                {g.comment && (
+                  <div style={{ fontSize:'10px', color:C.muted, marginTop:'4px', lineHeight:1.4, fontStyle:'italic' }}>{g.comment}</div>
+                )}
+                <div style={{ display:'flex', flexWrap:'wrap', gap:'3px', marginTop:'7px' }}>
+                  {docs.slice(0,4).map(d => (
+                    <span key={d.id} style={{
+                      fontSize:'9px', padding:'1px 5px', borderRadius:'4px',
+                      background: (TYPE_COLOR[d.type]||C.accent)+'18',
+                      color: TYPE_COLOR[d.type]||C.accent, fontWeight:600,
+                      maxWidth:'80px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+                    }}>{d.name.replace(/\.[^.]+$/,'')}</span>
+                  ))}
+                  {docs.length > 4 && <span style={{ fontSize:'9px', color:C.muted }}>+{docs.length-4}</span>}
+                </div>
+                <div style={{ fontSize:'10px', color:C.muted, marginTop:'5px' }}>
+                  {g.docIds.length} docs · {fmtDate(g.createdAt)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Save button */}
+        <div style={{ padding:'10px', borderTop:C.border, flexShrink:0 }}>
+          {n < 3 ? (
+            <div style={{ fontSize:'11px', color:C.muted, textAlign:'center', padding:'4px 0' }}>
+              Selecciona ≥3 docs para guardar
+            </div>
+          ) : (
+            <button onClick={() => { setSaveName(''); setSaveComment(''); setShowSave(true); }} style={{
+              width:'100%', padding:'8px', fontSize:'12px', fontWeight:600,
+              background:C.accent, color:'#fff', border:'none', borderRadius:'8px',
+              cursor:'pointer', fontFamily:C.font, display:'flex', alignItems:'center', justifyContent:'center', gap:'6px',
+            }}>
+              <i className="ti ti-device-floppy" style={{ fontSize:'13px' }} />
+              Guardar grafo ({n} docs)
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* ── Graph canvas ── */}
+      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        <div style={{ flex:1, position:'relative', overflow:'hidden', background:C.bg }}>
+          {n < 3 && (
+            <div style={{
+              position:'absolute', inset:0, zIndex:1, pointerEvents:'none',
+              display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:'10px',
+            }}>
+              <i className="ti ti-circles-relation" style={{ fontSize:'42px', color:'#e0e0e5' }} />
+              <span style={{ fontSize:'13px', color:C.muted }}>
+                Selecciona al menos 3 documentos para construir el grafo
               </span>
-            )}
-          </div>
-        )}
-
-        <svg ref={svgRef} style={{ width:'100%', height:'100%', display:'block' }} />
-
-        {tip && (
-          <div style={{
-            position:'absolute', left:tip.x, top:tip.y, zIndex:10,
-            background:C.bg, border:C.border, borderRadius:'10px',
-            padding:'10px 14px', minWidth:'150px',
-            boxShadow:'0 4px 20px rgba(0,0,0,0.09)',
-            pointerEvents:'none',
-          }}>
-            <div style={{ fontSize:'12px', fontWeight:600, color:C.text, marginBottom:'3px' }}>
-              {tip.doc.name}
+              {n > 0 && (
+                <span style={{ fontSize:'11px', color:'#c7c7cc' }}>
+                  {n} de 3 seleccionado{n !== 1 ? 's' : ''}
+                </span>
+              )}
             </div>
-            <div style={{ fontSize:'11px', color:C.muted }}>
-              Click para ver detalles
+          )}
+
+          <svg ref={svgRef} style={{ width:'100%', height:'100%', display:'block' }} />
+
+          {tip && (
+            <div style={{
+              position:'absolute', left:tip.x, top:tip.y, zIndex:10,
+              background:C.bg, border:C.border, borderRadius:'10px',
+              padding:'10px 14px', minWidth:'150px',
+              boxShadow:'0 4px 20px rgba(0,0,0,0.09)', pointerEvents:'none',
+            }}>
+              <div style={{ fontSize:'12px', fontWeight:600, color:C.text, marginBottom:'3px' }}>{tip.doc.name}</div>
+              <div style={{ fontSize:'11px', color:C.muted }}>Click para ver detalles</div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {modalDoc && (
-        <DocModal
-          doc={modalDoc}
-          onClose={() => setModalDoc(null)}
-          onRemove={onToggle}
-        />
+        <DocModal doc={modalDoc} onClose={() => setModalDoc(null)} onRemove={onToggle} />
+      )}
+
+      {/* Save graph modal */}
+      {showSave && (
+        <div onClick={() => setShowSave(false)} style={{
+          position:'fixed', inset:0, background:'rgba(0,0,0,0.18)', zIndex:2000,
+          display:'flex', alignItems:'center', justifyContent:'center', fontFamily:C.font,
+        }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background:C.bg, borderRadius:'16px', padding:'28px', width:'380px',
+            boxShadow:'0 20px 60px rgba(0,0,0,0.15)', border:C.border,
+          }}>
+            <div style={{ fontSize:'15px', fontWeight:600, color:C.text, marginBottom:'4px' }}>Guardar grafo</div>
+            <div style={{ fontSize:'12px', color:C.muted, marginBottom:'20px' }}>
+              {n} documentos · combinación de conocimiento
+            </div>
+
+            <div style={{ marginBottom:'12px' }}>
+              <div style={{ fontSize:'11px', fontWeight:600, color:C.muted, textTransform:'uppercase', letterSpacing:'0.5px', marginBottom:'6px' }}>Nombre</div>
+              <input
+                autoFocus
+                type="text"
+                placeholder={`Grafo ${(savedGraphs||[]).length + 1}`}
+                value={saveName}
+                onChange={e => setSaveName(e.target.value)}
+                onKeyDown={e => e.key === 'Escape' && setShowSave(false)}
+                style={{ width:'100%', boxSizing:'border-box', padding:'10px 12px', fontSize:'13px', border:C.border, borderRadius:'8px', outline:'none', fontFamily:C.font, color:C.text, background:C.bg }}
+              />
+            </div>
+
+            <div style={{ marginBottom:'20px' }}>
+              <div style={{ fontSize:'11px', fontWeight:600, color:C.muted, textTransform:'uppercase', letterSpacing:'0.5px', marginBottom:'6px' }}>Comentario <span style={{ fontWeight:400, textTransform:'none' }}>(opcional)</span></div>
+              <textarea
+                placeholder="Describe el propósito de esta combinación…"
+                value={saveComment}
+                onChange={e => setSaveComment(e.target.value)}
+                rows={2}
+                style={{ width:'100%', boxSizing:'border-box', padding:'10px 12px', fontSize:'13px', border:C.border, borderRadius:'8px', outline:'none', fontFamily:C.font, color:C.text, resize:'none', background:C.bg }}
+              />
+            </div>
+
+            {/* Doc chips preview */}
+            <div style={{ display:'flex', flexWrap:'wrap', gap:'4px', marginBottom:'20px' }}>
+              {selected.map(id => {
+                const d = pool.find(x => x.id === id);
+                if (!d) return null;
+                return (
+                  <span key={id} style={{
+                    fontSize:'10px', padding:'2px 7px', borderRadius:'5px',
+                    background:(TYPE_COLOR[d.type]||C.accent)+'18',
+                    color:TYPE_COLOR[d.type]||C.accent, fontWeight:600,
+                  }}>{d.name.replace(/\.[^.]+$/,'')}</span>
+                );
+              })}
+            </div>
+
+            <div style={{ display:'flex', gap:'8px', justifyContent:'flex-end' }}>
+              <button onClick={() => setShowSave(false)} style={{ padding:'8px 16px', fontSize:'12px', border:C.border, borderRadius:'8px', cursor:'pointer', background:'transparent', fontFamily:C.font, color:C.muted }}>
+                Cancelar
+              </button>
+              <button onClick={() => {
+                onSaveGraph?.({ name: saveName, comment: saveComment });
+                setShowSave(false);
+              }} style={{ padding:'8px 20px', fontSize:'12px', background:C.accent, color:'#fff', border:'none', borderRadius:'8px', cursor:'pointer', fontFamily:C.font, fontWeight:600 }}>
+                Guardar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -2818,7 +3272,7 @@ function LoginPage({ onLogin }) {
           Bienvenido
         </div>
         <div style={{ fontSize:'12px', color:'#6b7280', marginBottom:'24px', lineHeight:1.5 }}>
-          Plataforma de conocimiento Sogol
+          Conocimiento empresarial para agentes de IA.
         </div>
         <button
           onClick={handleLogin}
@@ -2847,7 +3301,8 @@ function App() {
   const [selected,   setSelected]   = useState([]);
   const [page,       setPage]       = useState('chat');
   const [llm,        setLlm]        = useState('claude');
-  const [queryStats, setQueryStats] = useState({});
+  const [docStats,     setDocStats]     = useState({}); // { [id]: { queries, context } }
+  const [savedGraphs,  setSavedGraphs]  = useState([]);
   const [companies,    setCompanies]    = useState([]);
   const [activeCo,     setActiveCo]     = useState(null);
   const [showNewCo,    setShowNewCo]    = useState(false);
@@ -2924,15 +3379,28 @@ function App() {
   if (!loggedIn) return <LoginPage onLogin={() => setLoggedIn(true)} />;
 
   const trackQuery = docIds => {
-    const now = new Date().toISOString();
-    setQueryStats(prev => {
+    setDocStats(prev => {
       const next = { ...prev };
       docIds.forEach(id => {
-        next[id] = { count: (prev[id]?.count || 0) + 1, lastAt: now };
+        next[id] = { queries: (prev[id]?.queries || 0) + 1 };
       });
       return next;
     });
   };
+
+  const saveGraph = ({ name, comment } = {}) => {
+    if (selected.length < 3) return;
+    const g = {
+      id:        'g' + Date.now(),
+      name:      (name||'').trim() || `Grafo ${savedGraphs.length + 1}`,
+      comment:   (comment||'').trim(),
+      docIds:    [...selected],
+      createdAt: new Date().toISOString(),
+    };
+    setSavedGraphs(prev => [g, ...prev]);
+  };
+
+  const deleteGraph = id => setSavedGraphs(prev => prev.filter(g => g.id !== id));
 
   return (
     <div style={{
@@ -2993,13 +3461,13 @@ function App() {
         )}
         <div style={{ flex:1, display:'flex', overflow:'hidden' }}>
           {page === 'documents' && (
-            <DocumentsPage selected={selected} onToggle={toggle} onClearAll={clearAll} activeCo={activeCo} companies={companies} onNewCo={() => setShowNewCo(true)} onSwitchCo={switchCo} search={docSearch} onSearch={setDocSearch} viewMode={docViewMode} onViewMode={setDocViewMode} onGlobalToast={showAppToast} onGoVisualize={onGoVisualize} onRealDocsChange={setAppRealDocs} />
+            <DocumentsPage selected={selected} onToggle={toggle} onClearAll={clearAll} activeCo={activeCo} companies={companies} onNewCo={() => setShowNewCo(true)} onSwitchCo={switchCo} search={docSearch} onSearch={setDocSearch} viewMode={docViewMode} onViewMode={setDocViewMode} onGlobalToast={showAppToast} onGoVisualize={onGoVisualize} onRealDocsChange={setAppRealDocs} docStats={docStats} />
           )}
           {page === 'visualize' && (
             <VisualizePage selected={selected} onToggle={toggle} focusDoc={visualizeFocusDoc} allRealDocs={appRealDocs} />
           )}
           {page === 'graphs' && (
-            <GraphsPage selected={selected} onToggle={toggle} allRealDocs={appRealDocs} />
+            <GraphsPage selected={selected} onToggle={toggle} allRealDocs={appRealDocs} docStats={docStats} savedGraphs={savedGraphs} onSaveGraph={saveGraph} onDeleteGraph={deleteGraph} onLoadGraph={ids => setSelected(ids)} />
           )}
           {page === 'chat' && (
             <ChatPage
