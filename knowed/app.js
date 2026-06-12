@@ -92,20 +92,27 @@ async function apiMoveFile(fileId, deptId, groupId) {
   });
 }
 
+async function apiDeleteFile(fileId) {
+  const res = await fetch(`${API_BASE}/files/${fileId}`, { method:'DELETE' });
+  return res.json();
+}
+
 const normalizeReal = r => ({
-  id:       r.id,
-  name:     r.original_name,
-  type:     r.type,
-  size:     r.size_bytes,
-  weight:   0.5,
-  links:    0,
-  graphs:   0,
-  queries:  0,
-  area:     'Upload',
-  date:     r.uploaded_at.slice(0, 10),
-  isReal:   true,
-  _deptId:  r.dept_id  || null,
-  _groupId: r.group_id || null,
+  id:         r.id,
+  name:       r.original_name,
+  type:       r.type,
+  size:       r.size_bytes,
+  weight:     0.5,
+  links:      0,
+  graphs:     0,
+  queries:    0,
+  area:       'Upload',
+  date:       r.uploaded_at?.slice(0, 10) || '',
+  isReal:     true,
+  chunks:     r.chunks || Math.max(5, Math.floor((r.size_bytes||0) / 1000)),
+  vectorized: 1,
+  _deptId:    r.dept_id  || null,
+  _groupId:   r.group_id || null,
 });
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -408,18 +415,20 @@ function Sidebar({ page, onNav, selected, onToggle }) {
 
 // ── Topbar ────────────────────────────────────────────────────────────────────
 
-function Topbar({ selected, onRemove, onClearAll, llm, onLlmChange, page, companies, activeCo, onSwitchCo }) {
-  const n  = selected.length;
-  const ec = n >= 2 ? n * (n - 1) / 2 : 0;
+function Topbar({ selected, onRemove, onClearAll, llm, onLlmChange, page, companies, activeCo, onSwitchCo, allRealDocs }) {
+  const n       = selected.length;
+  const ec      = n >= 2 ? n * (n - 1) / 2 : 0;
+  const docPool = [...documents, ...(allRealDocs||[])];
 
   return (
     <div style={{
       height:'48px', flexShrink:0, background:C.bg, borderBottom:C.border,
       display:'flex', alignItems:'center', padding:'0 16px', gap:'8px', fontFamily:C.font,
+      overflow:'hidden',
     }}>
-      {/* Company selector — visible on all non-documents pages when companies exist */}
+      {/* Company selector */}
       {(companies||[]).length > 0 && (
-        <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:'6px', flexShrink:0 }}>
           <i className="ti ti-building" style={{ fontSize:'13px', color:C.muted }} />
           <select value={activeCo||''} onChange={e => onSwitchCo(e.target.value)} style={{
             fontSize:'12px', padding:'3px 8px', border:C.border, borderRadius:'6px',
@@ -427,7 +436,39 @@ function Topbar({ selected, onRemove, onClearAll, llm, onLlmChange, page, compan
           }}>
             {(companies||[]).map(co => <option key={co.id} value={co.id}>{co.name}</option>)}
           </select>
-          <div style={{ width:'0.5px', height:'18px', background:'#e0e0e5' }} />
+          <div style={{ width:'0.5px', height:'18px', background:'#e0e0e5', flexShrink:0 }} />
+        </div>
+      )}
+
+      {/* Chat context chips — inline in topbar */}
+      {page === 'chat' && (
+        <div style={{ display:'flex', alignItems:'center', gap:'6px', flex:1, overflow:'hidden' }}>
+          {n === 0 ? (
+            <span style={{ fontSize:'11px', color:'#c7c7cc', fontStyle:'italic', whiteSpace:'nowrap' }}>
+              Sin contexto — selecciona docs en Documents
+            </span>
+          ) : (
+            <div style={{ display:'flex', alignItems:'center', gap:'5px', overflowX:'auto', flex:1 }}>
+              {selected.map(id => {
+                const doc = docPool.find(d => d.id === id);
+                if (!doc) return null;
+                return (
+                  <div key={id} style={{
+                    display:'inline-flex', alignItems:'center', gap:'4px', flexShrink:0,
+                    background:C.accent+'12', border:'0.5px solid '+C.accent+'40',
+                    borderRadius:'20px', padding:'3px 7px 3px 9px',
+                    fontSize:'11px', color:C.accent, fontWeight:500, whiteSpace:'nowrap',
+                  }}>
+                    <i className={'ti '+(TYPE_ICON[doc.type]||'ti-file')} style={{ fontSize:'11px' }} />
+                    {doc.name}
+                    <span onClick={() => onRemove(id)} style={{ cursor:'pointer', display:'flex', alignItems:'center', opacity:0.6, marginLeft:'1px' }}>
+                      <i className="ti ti-x" style={{ fontSize:'10px' }} />
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -443,14 +484,12 @@ function Topbar({ selected, onRemove, onClearAll, llm, onLlmChange, page, compan
               Graph ready
             </div>
           )}
+          <div style={{ flex:1 }} />
+          {n >= 3 && <span style={{ fontSize:'11px', color:'#c7c7cc' }}>Drag nodes · scroll to zoom · click for details</span>}
         </>
       )}
 
-      <div style={{ flex:1 }} />
-
-      {n >= 3 && page === 'graphs' && (
-        <span style={{ fontSize:'11px', color:'#c7c7cc' }}>Drag nodes · scroll to zoom · click for details</span>
-      )}
+      {page !== 'chat' && page !== 'graphs' && <div style={{ flex:1 }} />}
     </div>
   );
 }
@@ -532,9 +571,236 @@ function ContextMenu({ menu, onClose, onAction }) {
   );
 }
 
+// ── Upload preview modal ──────────────────────────────────────────────────────
+
+function UploadPreviewModal({ files, destLabel, onConfirm, onCancel }) {
+  const [preview, setPreview] = useState(null); // { type, content }
+
+  useEffect(() => {
+    const f = files[0];
+    if (files.length !== 1 || !f) return;
+    const ext = f.name.split('.').pop().toLowerCase();
+    if (ext === 'pdf') {
+      setPreview({ type:'pdf', url: URL.createObjectURL(f) });
+      return () => { };
+    }
+    if (ext === 'txt' || ext === 'csv') {
+      const reader = new FileReader();
+      reader.onload = e => {
+        const lines = (e.target.result || '').split('\n');
+        setPreview({ type: ext === 'csv' ? 'csv' : 'txt', lines });
+      };
+      reader.readAsText(f);
+    } else {
+      setPreview({ type:'binary' });
+    }
+  }, []);
+
+  const isBulk    = files.length >= 6;
+  const isMulti   = files.length >= 2 && files.length <= 5;
+  const isSingle  = files.length === 1;
+  const headerBg  = isBulk ? '#e8a020' : C.accent;
+  const headerTxt = isBulk ? '⚠️  Subida masiva' : 'Confirmar subida';
+
+  return (
+    <div onClick={onCancel} style={{ position:'fixed', inset:0, zIndex:3500, background:'rgba(0,0,0,0.45)', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:C.font }}>
+      <div onClick={e => e.stopPropagation()} style={{ width:'520px', maxWidth:'calc(100vw - 32px)', background:C.bg, borderRadius:'16px', overflow:'hidden', boxShadow:'0 24px 80px rgba(0,0,0,0.25)' }}>
+
+        {/* Header */}
+        <div style={{ height:'48px', background:headerBg, display:'flex', alignItems:'center', padding:'0 20px', gap:'10px' }}>
+          <i className="ti ti-upload" style={{ fontSize:'16px', color:'#fff' }} />
+          <span style={{ fontSize:'13px', fontWeight:600, color:'#fff' }}>{headerTxt}</span>
+        </div>
+
+        <div style={{ padding:'22px 24px 20px' }}>
+
+          {/* BULK — 6+ files */}
+          {isBulk && (
+            <div style={{ textAlign:'center', padding:'12px 0 20px' }}>
+              <div style={{ fontSize:'38px', marginBottom:'12px' }}>⚠️</div>
+              <div style={{ fontSize:'14px', fontWeight:600, color:C.text, marginBottom:'8px' }}>
+                Estás a punto de subir {files.length} documentos
+              </div>
+              <div style={{ fontSize:'12px', color:C.muted, lineHeight:1.6 }}>
+                Esta acción puede tardar varios minutos.<br/>
+                Los documentos se vectorizarán en secuencia.
+              </div>
+            </div>
+          )}
+
+          {/* MULTI — 2-5 files */}
+          {isMulti && (
+            <>
+              <div style={{ fontSize:'13px', color:C.muted, marginBottom:'4px' }}>Vas a subir {files.length} documentos{destLabel ? ' a:' : ':'}</div>
+              {destLabel && <div style={{ fontSize:'12px', fontWeight:600, color:C.text, marginBottom:'14px' }}>{destLabel}</div>}
+              <div style={{ display:'flex', flexDirection:'column', gap:'6px', marginBottom:'4px' }}>
+                {Array.from(files).map((f, i) => (
+                  <div key={i} style={{ display:'flex', alignItems:'center', gap:'10px', padding:'8px 12px', background:C.surface, borderRadius:'8px', border:C.border }}>
+                    <i className={'ti '+(TYPE_ICON[f.name.split('.').pop().toLowerCase()]||'ti-file')} style={{ fontSize:'16px', color:TYPE_COLOR[f.name.split('.').pop().toLowerCase()], flexShrink:0 }} />
+                    <span style={{ flex:1, fontSize:'12px', color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{f.name}</span>
+                    <span style={{ fontSize:'11px', color:C.muted, flexShrink:0 }}>{fmtSize(f.size)}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* SINGLE — 1 file */}
+          {isSingle && (
+            <>
+              <div style={{ display:'flex', alignItems:'center', gap:'10px', padding:'10px 14px', background:C.surface, borderRadius:'10px', border:C.border, marginBottom:'14px' }}>
+                <i className={'ti '+(TYPE_ICON[files[0].name.split('.').pop().toLowerCase()]||'ti-file')} style={{ fontSize:'18px', color:TYPE_COLOR[files[0].name.split('.').pop().toLowerCase()], flexShrink:0 }} />
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:'13px', fontWeight:600, color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{files[0].name}</div>
+                  <div style={{ fontSize:'11px', color:C.muted }}>
+                    {fmtSize(files[0].size)}{destLabel ? ' · '+destLabel : ''}
+                  </div>
+                </div>
+              </div>
+
+              {/* Preview */}
+              {preview?.type === 'pdf' && (
+                <div style={{ borderRadius:'8px', overflow:'hidden', border:C.border, marginBottom:'4px' }}>
+                  <iframe src={preview.url} style={{ width:'100%', height:'220px', border:'none', display:'block' }} />
+                </div>
+              )}
+              {preview?.type === 'txt' && (
+                <div style={{ borderRadius:'8px', border:C.border, overflow:'hidden', marginBottom:'4px', background:'#fafafa' }}>
+                  <pre style={{ margin:0, padding:'12px', fontSize:'11px', maxHeight:'200px', overflowY:'auto', color:C.text, fontFamily:'monospace', lineHeight:1.5 }}>
+                    {preview.lines.slice(0,10).join('\n')}
+                  </pre>
+                </div>
+              )}
+              {preview?.type === 'csv' && (
+                <div style={{ borderRadius:'8px', border:C.border, overflow:'auto', marginBottom:'4px', maxHeight:'200px', background:'#fafafa' }}>
+                  <table style={{ borderCollapse:'collapse', fontSize:'11px', width:'100%', minWidth:'400px' }}>
+                    <tbody>
+                      {preview.lines.slice(0,5).map((line, ri) => (
+                        <tr key={ri} style={{ background: ri===0 ? C.surface : 'transparent', borderBottom:C.border }}>
+                          {line.split(',').map((cell, ci) => (
+                            <td key={ci} style={{ padding:'5px 10px', color: ri===0 ? C.text : C.muted, fontWeight: ri===0?600:400, whiteSpace:'nowrap', maxWidth:'150px', overflow:'hidden', textOverflow:'ellipsis', borderRight:C.border }}>{cell.trim().replace(/^"|"$/g,'')}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {preview?.type === 'binary' && (
+                <div style={{ textAlign:'center', padding:'20px', background:C.surface, borderRadius:'8px', border:C.border, marginBottom:'4px' }}>
+                  <i className="ti ti-file-unknown" style={{ fontSize:'28px', color:C.muted, display:'block', marginBottom:'6px' }} />
+                  <span style={{ fontSize:'11px', color:C.muted }}>Sin previsualización disponible para este tipo de archivo</span>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Actions */}
+          <div style={{ display:'flex', gap:'8px', justifyContent:'flex-end', marginTop:'18px' }}>
+            <button onClick={onCancel} style={{ padding:'8px 18px', fontSize:'12px', border:C.border, borderRadius:'9px', cursor:'pointer', background:'transparent', fontFamily:C.font, color:C.muted }}>Cancelar</button>
+            <button onClick={onConfirm} style={{ padding:'8px 22px', fontSize:'12px', fontWeight:600, background:isBulk?'#e8a020':C.accent, color:'#fff', border:'none', borderRadius:'9px', cursor:'pointer', fontFamily:C.font }}>
+              {isBulk ? 'Subir todos' : 'Confirmar y subir'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Delete doc modal ──────────────────────────────────────────────────────────
+
+function DeleteDocModal({ doc, savedGraphs, onConfirm, onCancel }) {
+  const [typed, setTyped] = useState('');
+
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onCancel(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  if (!doc) return null;
+
+  const inGraphs     = (savedGraphs||[]).filter(g => g.docIds.includes(doc.id));
+  const hasRelations = inGraphs.length > 0 || doc.links > 0;
+  const hasUsage     = (doc.queries||0) > 0;
+  const level        = hasRelations ? 3 : hasUsage ? 2 : 1;
+  const chunks       = doc.chunks || Math.max(5, Math.floor((doc.size||0)/1000));
+  const fmtQ         = n => n >= 1000 ? (n/1000).toFixed(1).replace(/\.0$/,'')+'k' : String(n||0);
+  const canDelete    = level < 3 || typed === 'BORRAR';
+
+  const headerBg  = level === 3 ? '#c0392b' : level === 2 ? '#e8a020' : C.muted;
+  const headerTxt = level === 3 ? '🔴  Documento con relaciones activas' : level === 2 ? '⚠️  Eliminar documento' : 'Eliminar documento';
+
+  return (
+    <div onClick={onCancel} style={{ position:'fixed', inset:0, zIndex:3500, background:'rgba(0,0,0,0.45)', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:C.font }}>
+      <div onClick={e => e.stopPropagation()} style={{ width:'400px', maxWidth:'calc(100vw - 32px)', background:C.bg, borderRadius:'16px', overflow:'hidden', boxShadow:'0 24px 80px rgba(0,0,0,0.25)' }}>
+
+        <div style={{ padding:'12px 20px', background:headerBg, display:'flex', alignItems:'center', gap:'8px' }}>
+          <span style={{ fontSize:'13px', fontWeight:600, color:'#fff' }}>{headerTxt}</span>
+        </div>
+
+        <div style={{ padding:'22px 24px 20px' }}>
+          <div style={{ fontSize:'14px', fontWeight:600, color:C.text, marginBottom:'4px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+            "{doc.name}"
+          </div>
+
+          {level === 1 && (
+            <div style={{ fontSize:'12px', color:C.muted, marginTop:'8px' }}>Esta acción es irreversible. El archivo y sus vectores se eliminarán del servidor.</div>
+          )}
+
+          {level === 2 && (
+            <div style={{ marginTop:'12px', display:'flex', flexDirection:'column', gap:'5px' }}>
+              {[
+                `${chunks} chunks vectorizados`,
+                `${fmtQ(doc.queries)} consultas acumuladas`,
+                `Peso RAG: ${((doc.queries||0)/10).toFixed(1)}x`,
+              ].map(t => (
+                <div key={t} style={{ display:'flex', alignItems:'center', gap:'6px', fontSize:'12px', color:C.muted }}>
+                  <span style={{ color:'#e8a020' }}>·</span> {t}
+                </div>
+              ))}
+              <div style={{ fontSize:'12px', color:C.muted, marginTop:'6px' }}>Sus vectores se eliminarán permanentemente.</div>
+            </div>
+          )}
+
+          {level === 3 && (
+            <div style={{ marginTop:'12px' }}>
+              <div style={{ display:'flex', flexDirection:'column', gap:'5px', marginBottom:'14px' }}>
+                {inGraphs.length > 0 && <div style={{ display:'flex', gap:'6px', fontSize:'12px', color:C.muted }}><span style={{ color:'#c0392b' }}>·</span>{inGraphs.length} grafo{inGraphs.length!==1?'s':''} de conocimiento</div>}
+                {doc.links > 0 && <div style={{ display:'flex', gap:'6px', fontSize:'12px', color:C.muted }}><span style={{ color:'#c0392b' }}>·</span>{doc.links} relaciones activas</div>}
+                <div style={{ fontSize:'12px', color:C.muted }}>Borrar afectará estos grafos permanentemente.</div>
+              </div>
+              <div style={{ fontSize:'11px', fontWeight:600, color:C.text, marginBottom:'6px', textTransform:'uppercase', letterSpacing:'0.4px' }}>Escribe BORRAR para confirmar:</div>
+              <input
+                autoFocus
+                value={typed}
+                onChange={e => setTyped(e.target.value)}
+                placeholder="BORRAR"
+                style={{ width:'100%', boxSizing:'border-box', padding:'9px 12px', fontSize:'13px', border: typed === 'BORRAR' ? '1.5px solid #c0392b' : C.border, borderRadius:'8px', outline:'none', fontFamily:C.font, color:C.text }}
+              />
+            </div>
+          )}
+
+          <div style={{ display:'flex', gap:'8px', justifyContent:'flex-end', marginTop:'20px' }}>
+            <button onClick={onCancel} style={{ padding:'8px 16px', fontSize:'12px', border:C.border, borderRadius:'8px', cursor:'pointer', background:'transparent', fontFamily:C.font, color:C.muted }}>Cancelar</button>
+            <button
+              onClick={() => canDelete && onConfirm()}
+              disabled={!canDelete}
+              style={{ padding:'8px 18px', fontSize:'12px', fontWeight:600, background: canDelete ? '#c0392b' : '#e0e0e0', color: canDelete ? '#fff' : '#aaa', border:'none', borderRadius:'8px', cursor: canDelete ? 'pointer' : 'default', fontFamily:C.font }}
+            >
+              {level === 3 ? 'Confirmar borrado' : 'Eliminar'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Documents page ────────────────────────────────────────────────────────────
 
-function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, onNewCo, onSwitchCo, search, onSearch, viewMode, onViewMode, onGlobalToast, onGoVisualize, onRealDocsChange, docStats }) {
+function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, onNewCo, onSwitchCo, search, onSearch, viewMode, onViewMode, onGlobalToast, onGoVisualize, onRealDocsChange, docStats, savedGraphs }) {
   const [nav,         setNav]         = useState({ view:'all', deptId:null, groupId:null });
   const [assign,      setAssign]      = useState(TREE.docAssignments);
   const [groups,      setGroups]      = useState([...TREE.groups]);
@@ -552,6 +818,8 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
   const [vecModal,      setVecModal]      = useState(null); // { file, resultReady, result, error }
   const [modalDoc,      setModalDoc]      = useState(null);
   const [moveDocId,     setMoveDocId]     = useState(null);
+  const [pendingFiles,  setPendingFiles]  = useState(null); // File[] waiting for preview confirm
+  const [deleteDocId,   setDeleteDocId]   = useState(null);
   const uploadRef = useRef(null);
 
   const allDocs      = [...documents, ...realDocs];
@@ -692,6 +960,9 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
       setMoveDocId(targetId);
     } else if (action === 'clearall') {
       onClearAll?.();
+    } else if (action === 'delete') {
+      const doc = [...documents, ...realDocs].find(d => d.id === targetId);
+      if (doc?.isReal) setDeleteDocId(targetId);
     }
   };
 
@@ -1270,8 +1541,8 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
       <ContextMenu menu={ctxMenu} onClose={closeCtx} onAction={handleCtxAction} />
 
       {/* Hidden upload input */}
-      <input ref={uploadRef} type="file" accept=".pdf,.txt,.xlsx" style={{ display:'none' }}
-        onChange={e => { const f = e.target.files[0]; if (f) doUpload(f); e.target.value = ''; }}
+      <input ref={uploadRef} type="file" accept=".pdf,.txt,.xlsx,.xls,.csv,.docx,.doc" multiple style={{ display:'none' }}
+        onChange={e => { const files = Array.from(e.target.files); e.target.value = ''; if (files.length) setPendingFiles(files); }}
       />
 
       {/* Toast */}
@@ -1343,6 +1614,46 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
           }}
         />
       )}
+
+      {/* Upload preview modal */}
+      {pendingFiles && (() => {
+        const dept = departments.find(d => d.id === nav.deptId);
+        const grp  = groups.find(g => g.id === nav.groupId);
+        const destLabel = dept ? (grp ? `${dept.name} › ${grp.name}` : dept.name) : null;
+        return (
+          <UploadPreviewModal
+            files={pendingFiles}
+            destLabel={destLabel}
+            onCancel={() => setPendingFiles(null)}
+            onConfirm={() => {
+              const files = pendingFiles;
+              setPendingFiles(null);
+              files.forEach(f => doUpload(f, nav.deptId, nav.groupId));
+            }}
+          />
+        );
+      })()}
+
+      {/* Delete modal */}
+      {deleteDocId && (() => {
+        const doc = [...documents, ...realDocs].find(d => d.id === deleteDocId);
+        if (!doc) return null;
+        const enriched = { ...doc, queries: docStats?.[doc.id]?.queries || 0 };
+        return (
+          <DeleteDocModal
+            doc={enriched}
+            savedGraphs={savedGraphs}
+            onCancel={() => setDeleteDocId(null)}
+            onConfirm={async () => {
+              setDeleteDocId(null);
+              apiDeleteFile(doc.id).catch(() => {});
+              setRealDocs(prev => { const next = prev.filter(d => d.id !== doc.id); onRealDocsChange?.(next); return next; });
+              setAssign(prev => { const next = { ...prev }; delete next[doc.id]; return next; });
+              if (selected.includes(doc.id)) onToggle(doc.id);
+            }}
+          />
+        );
+      })()}
 
       {/* Details modal */}
       {modalDoc && (
@@ -1571,38 +1882,6 @@ function ChatPage({ selected, onRemove, llm, onLlmChange, onTrackQuery, companie
       <canvas ref={bgChatCanvasRef} style={{
         position:'absolute', inset:0, width:'100%', height:'100%', pointerEvents:'none',
       }} />
-      {/* Context band */}
-      <div style={{
-        padding:'8px 20px', borderBottom:C.border, flexShrink:0,
-        display:'flex', alignItems:'center', gap:'8px', overflowX:'auto',
-      }}>
-        <span style={{ fontSize:'11px', color:C.muted, flexShrink:0 }}>Context:</span>
-        {selected.length === 0 && (
-          <span style={{ fontSize:'11px', color:'#c7c7cc', fontStyle:'italic' }}>
-            No documents — go to Documents to add context
-          </span>
-        )}
-        {selected.map(id => {
-          const doc = allDocPool.find(d => d.id === id);
-          if (!doc) return null;
-          return (
-            <div key={id} style={{
-              display:'inline-flex', alignItems:'center', gap:'5px', flexShrink:0,
-              background:C.accent+'12', border:'0.5px solid '+C.accent+'40',
-              borderRadius:'20px', padding:'3px 8px 3px 10px',
-              fontSize:'11px', color:C.accent, fontWeight:500, whiteSpace:'nowrap',
-            }}>
-              <i className={'ti '+(TYPE_ICON[doc.type]||'ti-file')} style={{ fontSize:'11px' }} />
-              {doc.name}
-              <span onClick={() => onRemove(id)}
-                style={{ cursor:'pointer', display:'flex', alignItems:'center', opacity:0.7, marginLeft:'1px' }}>
-                <i className="ti ti-x" style={{ fontSize:'10px' }} />
-              </span>
-            </div>
-          );
-        })}
-      </div>
-
       {/* Messages */}
       <div style={{ flex:1, overflow:'auto', padding:'28px 20px 12px' }}>
         <div style={{ maxWidth:'720px', margin:'0 auto' }}>
@@ -2676,7 +2955,7 @@ function DocPreview({ doc, isSelected, onToggle }) {
 
       {/* Content preview */}
       {isRealPdf
-        ? <div style={{ flex:1, minHeight:'64vh', display:'flex', flexDirection:'column', background:'#fff' }}>
+        ? <div style={{ height:'74vh', display:'flex', flexDirection:'column', background:'#fff' }}>
             <InlinePdfViewer fileId={doc.id} fileName={doc.name} />
           </div>
         : isSpreadsheet
@@ -2719,7 +2998,7 @@ function InlinePdfViewer({ fileId, fileName }) {
   );
   return (
     <iframe src={blobUrl} title={fileName}
-      style={{ width:'100%', height:'100%', border:'none', display:'block' }} />
+      style={{ width:'100%', flex:1, height:'100%', border:'none', display:'block', minHeight:0 }} />
   );
 }
 
@@ -2825,7 +3104,7 @@ function VisualizePage({ selected, onToggle, focusDoc, allRealDocs }) {
           <span style={{ fontSize:'13px', color:C.muted, fontFamily:C.font }}>Selecciona un documento para visualizarlo</span>
         </div>
       ) : (
-        <div style={{ flex:1, overflow:'auto', background:C.surface, display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'32px 28px' }}>
+        <div style={{ flex:1, overflow:'auto', background:C.surface, display:'flex', alignItems:viewDoc?.isReal && viewDoc?.type==='pdf' ? 'stretch' : 'flex-start', justifyContent:'center', padding: viewDoc?.isReal && viewDoc?.type==='pdf' ? '28px' : '32px 28px' }}>
           <DocPreview
             doc={viewDoc}
             isSelected={selected.includes(viewDoc.id)}
@@ -3450,6 +3729,7 @@ function App() {
             llm={llm} onLlmChange={setLlm}
             page={page}
             companies={companies} activeCo={activeCo} onSwitchCo={switchCo}
+            allRealDocs={appRealDocs}
           />
         )}
         {showNewCo && (
@@ -3473,7 +3753,7 @@ function App() {
         )}
         <div style={{ flex:1, display:'flex', overflow:'hidden' }}>
           {page === 'documents' && (
-            <DocumentsPage selected={selected} onToggle={toggle} onClearAll={clearAll} activeCo={activeCo} companies={companies} onNewCo={() => setShowNewCo(true)} onSwitchCo={switchCo} search={docSearch} onSearch={setDocSearch} viewMode={docViewMode} onViewMode={setDocViewMode} onGlobalToast={showAppToast} onGoVisualize={onGoVisualize} onRealDocsChange={setAppRealDocs} docStats={docStats} />
+            <DocumentsPage selected={selected} onToggle={toggle} onClearAll={clearAll} activeCo={activeCo} companies={companies} onNewCo={() => setShowNewCo(true)} onSwitchCo={switchCo} search={docSearch} onSearch={setDocSearch} viewMode={docViewMode} onViewMode={setDocViewMode} onGlobalToast={showAppToast} onGoVisualize={onGoVisualize} onRealDocsChange={setAppRealDocs} docStats={docStats} savedGraphs={savedGraphs} />
           )}
           {page === 'visualize' && (
             <VisualizePage selected={selected} onToggle={toggle} focusDoc={visualizeFocusDoc} allRealDocs={appRealDocs} />

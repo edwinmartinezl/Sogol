@@ -20,6 +20,9 @@ const ALLOWED_EXT = new Set(['.pdf', '.txt', '.xlsx', '.xls', '.csv', '.docx', '
 // ── Init SQLite ───────────────────────────────────────────────────────────────
 
 const db = new Database(DB_PATH);
+// Migration: add columns to existing DBs
+try { db.exec(`ALTER TABLE files ADD COLUMN vectorized INTEGER DEFAULT 1`); } catch {}
+try { db.exec(`ALTER TABLE files ADD COLUMN chunks INTEGER DEFAULT 0`);     } catch {}
 db.exec(`
   CREATE TABLE IF NOT EXISTS files (
     id            TEXT PRIMARY KEY,
@@ -32,7 +35,9 @@ db.exec(`
     size_bytes    INTEGER NOT NULL,
     dept_id       TEXT,
     group_id      TEXT,
-    uploaded_at   TEXT NOT NULL
+    uploaded_at   TEXT NOT NULL,
+    vectorized    INTEGER DEFAULT 1,
+    chunks        INTEGER DEFAULT 0
   );
   CREATE TABLE IF NOT EXISTS companies (
     id         TEXT PRIMARY KEY,
@@ -147,6 +152,8 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 500, { error: 'Could not write file: ' + e.message });
       }
 
+      const size_bytes = fileData.buffer.length;
+      const chunks     = Math.max(5, Math.floor(size_bytes / 1000));
       const record = {
         id,
         client_id,
@@ -155,19 +162,21 @@ const server = http.createServer(async (req, res) => {
         stored_name,
         path_on_disk:  dest,
         type:          fileData.ext.replace('.', ''),
-        size_bytes:    fileData.buffer.length,
+        size_bytes,
         dept_id:       null,
         group_id:      null,
         uploaded_at:   new Date().toISOString(),
+        vectorized:    1,
+        chunks,
       };
 
       db.prepare(`
         INSERT INTO files
           (id, client_id, company_id, original_name, stored_name, path_on_disk,
-           type, size_bytes, dept_id, group_id, uploaded_at)
+           type, size_bytes, dept_id, group_id, uploaded_at, vectorized, chunks)
         VALUES
           (@id, @client_id, @company_id, @original_name, @stored_name, @path_on_disk,
-           @type, @size_bytes, @dept_id, @group_id, @uploaded_at)
+           @type, @size_bytes, @dept_id, @group_id, @uploaded_at, @vectorized, @chunks)
       `).run(record);
 
       console.log(`[upload] ${record.original_name} → ${stored_name}`);

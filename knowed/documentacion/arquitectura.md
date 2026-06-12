@@ -241,6 +241,39 @@ const GRAPH_EDGES = (() => {
 
 En el `useEffect` de GraphsPage, el grafo conecta **todos los pares** de `selDocs` con fallback `weight:1` cuando no hay co-ocurrencia — garantiza conectividad total para cualquier combinación ≥ 3 docs.
 
+## Principio fundamental de Sogol (prototipo)
+
+> **Todo documento subido al sistema está vectorizado por definición.**
+
+En la fase de prototipo, no existe un motor de vectorización real. El campo `vectorized = 1` se asigna automáticamente en el servidor al momento de la subida — todos los archivos están listos para RAG desde que se cargan.
+
+| Aspecto | Valor |
+|---------|-------|
+| `vectorized` | Siempre `1` en la BD |
+| `chunks` | `max(5, floor(size_bytes / 1000))` — estimado por tamaño |
+| `VectorizingModal` | Animación de progreso simulada (~4s); no ejecuta vectorización real |
+| Restricción de subida | Ninguna — cualquier doc válido se puede subir en modo prueba |
+
+**Por qué:** Sogol se está desarrollando y probando antes de integrar un motor de embeddings real (OpenAI, Cohere, etc.). Bloquear la subida hasta tener vectorización real impediría avanzar el prototipo. Cuando se integre el motor, se cambia `vectorized` al valor real y `VectorizingModal` ejecutará el proceso verdadero.
+
+### Columnas de vectorización en `files`
+
+```sql
+vectorized INTEGER DEFAULT 1   -- 1 = listo para RAG (siempre en prototipo)
+chunks     INTEGER DEFAULT 0   -- número de fragmentos; 0 si no está calculado
+```
+
+Migración segura para bases de datos existentes:
+
+```js
+try { db.exec(`ALTER TABLE files ADD COLUMN vectorized INTEGER DEFAULT 1`); } catch {}
+try { db.exec(`ALTER TABLE files ADD COLUMN chunks INTEGER DEFAULT 0`);     } catch {}
+```
+
+El `try/catch` silencia el error si la columna ya existe — idempotente en cualquier DB.
+
+---
+
 ## Seguridad — modelo basado en datos
 
 El control de acceso en KnowLayer se aplica **en la capa de datos**, no en el LLM.

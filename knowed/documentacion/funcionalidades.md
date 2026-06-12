@@ -147,6 +147,66 @@ Si no hay departamentos Y no hay sin-asignar → empty state normal con botón "
 
 Cada vez que un documento se mueve (drag&drop) o se sube dentro de un departamento/carpeta, se llama `apiMoveFile(fileId, deptId, groupId)` que hace `PATCH /api/files/:id/move`. La asignación se guarda en SQLite (`dept_id`, `group_id` en la tabla `files`). Al recargar, el archivo aparece en el lugar correcto.
 
+### Ciclo de vida de un documento
+
+```
+Seleccionar archivo(s)
+    ↓
+UploadPreviewModal — previsualización antes de confirmar
+    ↓
+doUpload() → POST /api/upload
+    ↓
+VectorizingModal — animación simulada (~4s)
+    ↓
+Documento en DocumentsPage (vectorized=1, chunks calculados)
+    ↓
+Uso en consultas de chat → peso sube
+    ↓
+DeleteDocModal (3 niveles de seguridad) → eliminado de DB y disco
+```
+
+### UploadPreviewModal
+
+Intercepta la selección de archivos antes de subirlos — permite al usuario revisar y confirmar.
+
+| Cantidad de archivos | Comportamiento |
+|---------------------|----------------|
+| 1 archivo | Información detallada + preview por tipo |
+| 2–5 archivos | Lista con nombre y tamaño |
+| 6+ archivos | Cabecera de advertencia naranja (subida masiva) |
+
+**Previews por tipo:**
+
+| Tipo | Preview |
+|------|---------|
+| `pdf` | `<iframe>` con blob URL, altura 220 px |
+| `csv` | Tabla primeras 5 filas (FileReader) |
+| `txt` | `<pre>` con primeras 10 líneas |
+| Otros | Placeholder con ícono de tipo |
+
+Al confirmar: se llama el flujo `doUpload` existente sin modificaciones. El servidor recibe el archivo exactamente igual que antes.
+
+### DeleteDocModal — 3 niveles de seguridad
+
+La eliminación de documentos requiere confirmación proporcional al impacto:
+
+| Nivel | Condición | Confirmación |
+|-------|-----------|-------------|
+| 1 | Sin uso ni relaciones | Botón "Eliminar" simple |
+| 2 | Tiene consultas (queries > 0) | Muestra chunks, queries y peso RAG; botón "Sí, eliminar" |
+| 3 | Está en grafos guardados o links > 0 | Requiere escribir "BORRAR" para habilitar el botón |
+
+**Lógica de nivel:**
+
+```js
+const inGraphs     = savedGraphs.filter(g => g.docIds.includes(doc.id));
+const hasRelations = inGraphs.length > 0 || doc.links > 0;
+const hasUsage     = (doc.queries || 0) > 0;
+const level        = hasRelations ? 3 : hasUsage ? 2 : 1;
+```
+
+Al confirmar: `DELETE /api/files/:id` → elimina de disco y SQLite → remueve de `realDocs`, `assign` y `selected`.
+
 ### Flujo de subida y vectorización
 
 Cuando el usuario sube un archivo (desde DocumentsPage o desde Chat):
