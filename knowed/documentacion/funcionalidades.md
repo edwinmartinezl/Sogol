@@ -17,21 +17,35 @@ Cada `ChatSessionItem` muestra:
 
 **Ventaja de diseño:** los documentos de conversaciones históricas nunca desaparecen del sidebar; siempre se pueden rescatar al contexto activo sin navegar a Documents.
 
-- Búsqueda por nombre en tiempo real (filtra docs en "This month")
-- Botón Upload (UI, sin backend)
+### Búsqueda de chats
+
+El input de búsqueda está ubicado **debajo de la etiqueta "Older"** y filtra `CHAT_SESSIONS` por el texto de `preview` en tiempo real. Placeholder: `"Search chats…"`.
+
+### Highlight de sesión activa
+
+Al hacer click en un `ChatSessionItem`:
+- El ítem se marca como activo: borde `1px solid #e8561c55` (naranja suave) + fondo `#e8561c0a`
+- Icono y texto del preview cambian a color `accent`
+- Todos los docs de esa sesión se añaden al contexto global (si no estaban ya)
+- Click en una pill individual hace toggle del doc solo (con `e.stopPropagation()`)
+
+Solo una sesión puede estar activa a la vez (estado `activeSession` en `Sidebar`).
+
 - Estado de selección persiste entre páginas
+- Botón Upload **eliminado** del sidebar (la subida ahora vive en el input del chat)
 
 ## Topbar
 
 | Condición | Badge |
 |-----------|-------|
-| 0 docs | Texto de ayuda gris |
+| 0 docs | Sin badge |
 | 1–2 docs | `"N doc(s) selected"` — pill gris |
-| ≥ 3 docs | `"Graph ready · N docs"` — pill azul con ícono triángulo |
+| ≥ 3 docs | `"Graph ready · N docs"` — pill naranja con ícono triángulo |
 
 - Pills individuales con `×` para deseleccionar sin salir de la vista
 - Botón **Clear all** cuando `selected.length >= 2`
-- Selector de modelo LLM (Claude 3.5, GPT-4o, Gemini, Llama)
+- Selector de modelo LLM — **solo existe dentro del input de Chat** (no aparece en el topbar en ninguna página)
+- Selector de empresa — visible solo en `page === 'documents'` y solo cuando ya existe al menos una empresa (`companies.length > 0`); sin botón `+ New company` (la creación ocurre desde el grid raíz)
 
 ## Vista Documents (`/documents`)
 
@@ -81,12 +95,77 @@ La vista `flat` (All documents) respeta el modo seleccionado y añade columna Lo
 Cierre: Escape, click fuera del menú, o seleccionar una opción.  
 **Acción funcional:** "New folder" en vista `dept` crea un grupo nuevo en el departamento activo.
 
+### Navegación por niveles
+
+La sección Documents navega por 4 niveles jerárquicos. Cada nivel tiene su propio estado vacío centrado con acción directa:
+
+| Nivel | Estado vacío | Acción |
+|-------|-------------|--------|
+| Raíz sin empresas | "Sin empresas" | Botón `+ New company` |
+| Raíz con empresas (ninguna activa) | Grid de tarjetas de empresa | Card `+ Nueva empresa` al final del grid |
+| Empresa sin departamentos | "Sin departamentos" | Botón `+ New department` |
+| Departamento vacío | "Departamento vacío" | Botones `New folder` + `Upload document` |
+
+#### Tarjetas de empresa
+
+Cuando existe al menos una empresa pero ninguna está activa, el contenido muestra un **grid de tarjetas** (mismo patrón visual que departamentos): icono naranja, nombre, hover con borde naranja. Click en tarjeta activa esa empresa y navega a sus departamentos.
+
+#### Breadcrumb
+
+- Cuando `activeCo` es null → breadcrumb oculto
+- Cuando `nav.view === 'all'` → click en nombre de empresa regresa al grid de empresas (`onSwitchCo(null)`)
+- Cuando `nav.view === 'dept'` o `'group'` → click en empresa va al grid de departamentos
+
 ### Multi-empresa
 
-- Selector de empresa en la barra superior (encima del breadcrumb)
-- Botón `+ New company` abre modal de creación (input + Enter / botón Crear)
-- Cada empresa tiene su propio árbol de carpetas
-- Empresa Demo (`c1`) tiene datos precargados; el resto arrancan vacíos
+- Selector de empresa en el **Topbar** — visible solo en Documents y solo si existen empresas
+- Las empresas se crean desde la card `+ Nueva empresa` del grid raíz
+- Cada empresa tiene su propio árbol de carpetas, departamentos y grupos
+- El estado de `companies` y `activeCo` vive en `App` y se pasa hacia abajo como props
+
+### Modales de creación
+
+Todos los modales siguen el mismo patrón: título, subtítulo contextual con el nombre del padre, input con autoFocus, botones **Cancel** / **Create**.
+
+| Modal | Subtítulo contextual |
+|-------|---------------------|
+| New company | (sin subtítulo) |
+| New department | "Organiza documentos y equipos dentro de {empresa}" |
+| New folder | "Agrupa documentos dentro de {departamento}" |
+
+### Toolbar
+
+El toolbar (búsqueda + grid/list toggle) solo aparece cuando hay una empresa activa. El botón "New folder" fue eliminado del toolbar — se accede desde el empty state del departamento o el menú contextual.
+
+### Sección "Sin departamento"
+
+Cuando una empresa tiene archivos con `dept_id: null` (sin asignar), la vista `all` muestra una sección **"Sin departamento"** debajo del grid de departamentos. Etiqueta con contador. Usa el mismo `renderDocs` que las demás vistas. Permite arrastrar los docs a un departamento para asignarlos (persistiendo vía `PATCH /api/files/:id/move`).
+
+Si no hay departamentos Y no hay sin-asignar → empty state normal con botón "New department".
+
+### Persistencia de asignación dept/grupo
+
+Cada vez que un documento se mueve (drag&drop) o se sube dentro de un departamento/carpeta, se llama `apiMoveFile(fileId, deptId, groupId)` que hace `PATCH /api/files/:id/move`. La asignación se guarda en SQLite (`dept_id`, `group_id` en la tabla `files`). Al recargar, el archivo aparece en el lugar correcto.
+
+### Flujo de subida y vectorización
+
+Cuando el usuario sube un archivo (desde DocumentsPage o desde Chat):
+
+1. `apiUpload(file, slug)` envía el archivo al servidor
+2. `VectorizingModal` aparece inmediatamente con barra de progreso animada (~4s simulados)
+3. Pasos: Subiendo → Extrayendo texto → Chunks → Embeddings → Vectores → Completo
+4. Al terminar: pantalla de éxito con chunks/vectores simulados; botón **"Ver documento"** para PDFs
+5. "Ver documento" navega directamente a la sección **Visualize** con el PDF abierto inline
+6. El modal muestra error si el servidor no responde
+
+### Visor de PDF inline
+
+"Ver PDF" (click derecho) y "Ver documento" (modal de vectorización) navegan a la sección **Visualize** de la app — no abren el visor del navegador ni modales flotantes.
+
+En Visualize, si el documento activo es un PDF real (`isReal && type === 'pdf'`), el panel derecho muestra `InlinePdfViewer`:
+- Hace `fetch /api/files/:id/view` → `r.blob()` → `URL.createObjectURL(blob)` → `<iframe>`
+- Evita restricciones CORS del navegador (blob URL es same-origin)
+- Estados: cargando (spinner) | ok (iframe fullscreen) | error (link nueva pestaña)
 
 ## Vista Graphs (`/graphs`)
 
@@ -98,9 +177,10 @@ El grafo **solo se construye cuando hay 3 o más documentos seleccionados**.
 | 1–2 | Mismo mensaje + contador "N de 3 seleccionados" |
 | ≥ 3 | Grafo 3D activo |
 
-- Grafo 3D interactivo en canvas HTML5 puro
-- **Nodos**: solo los documentos seleccionados; círculos con radio proporcional al `weight` (mapeo 20–40px base)
-  - Color por tipo: xlsx `#34a853`, pdf `#ea4335`, csv `#4285f4`
+- Grafo interactivo (D3 force layout 2D)
+- Incluye tanto documentos mock como documentos reales de SQLite (`allRealDocs` prop desde App)
+- **Nodos**: solo los documentos seleccionados; círculos con radio proporcional al `weight`
+  - Color por tipo: pdf `#ea4335`, xlsx/xls `#34a853`, csv `#34a853`, docx/doc `#4285f4`, txt `#9aa0a6`
   - Opacidad aumenta con profundidad (efecto 3D)
   - Anillo azul `#0071e3` en hover
   - Label truncado a 14 chars bajo cada nodo
@@ -127,42 +207,87 @@ Se abre al hacer click en cualquier nodo del grafo.
 ## Vista Chat (`/chat`) — home
 
 - Banda de contexto con pills de documentos activos (deseleccionables con ×)
-- Historial de mensajes pre-seeded (`CHAT_HISTORY`)
-- Burbujas de chat: user (azul, derecha) / AI (gris, izquierda)
+- Las pills muestran tanto documentos mock como documentos reales de SQLite (`allDocPool = documents + allRealDocs`)
+- **Estado vacío limpio**: sin mensajes pre-seeded; icono + "Ask anything" + texto contextual según si hay docs en contexto o no
+- Burbujas de chat: user (naranja, derecha) / AI (superficie, izquierda)
 - Emergent Insight card dentro de burbujas AI cuando hay `msg.insight`
 - Source pills bajo burbujas AI indicando qué documentos se usaron
-- Input con Enter para enviar, Shift+Enter para salto de línea
-- Botón circular con flecha, activo solo si hay texto
+- Enter para enviar, Shift+Enter para salto de línea
 - Tracking de `queryStats` por documento en cada envío
 - Footer con conteo de contexto y disclaimer de seguridad
+- **Autofocus**: el textarea recibe foco automáticamente al montar la página (`useEffect + inputRef`)
+
+### Input box rediseñado
+
+El textarea y los controles están dentro de un contenedor rounded unificado:
+
+```
+┌──────────────────────────────────────────────────┐
+│  [pills de archivos adjuntos si hay]             │
+│  textarea (rows=1, borde propio eliminado)       │
+│──────────────────────────────────────────────────│
+│  [+]           [modelo ▾]  [🎤]  [⬆ naranja]    │
+└──────────────────────────────────────────────────┘
+```
+
+| Control | Posición | Función |
+|---------|----------|---------|
+| `+` | Izquierda inferior | Abre selector de archivos (`.pdf,.xlsx,.csv,.docx,.txt`) |
+| Selector de modelo | Centro-derecha | Claude 3.5 / GPT-4o / Gemini / Llama |
+| Micrófono `🎤` | Centro-derecha | Placeholder UI |
+| Enviar `⬆` | Extremo derecho | Naranja si hay texto, gris si vacío |
+
+### Subida de archivos
+
+- `fileRef` apunta a un `<input type="file" multiple>` oculto
+- Archivos seleccionados aparecen como pills `{nombre, tamaño}` dentro del input box
+- Cada pill tiene botón `×` para eliminar el adjunto antes de enviar
 
 ## Vista Visualizar (`/visualize`)
 
-> **Regla fundamental:** el panel izquierdo muestra **únicamente los documentos marcados** (seleccionados) en el sidebar global. No aparecen documentos que no estén en el contexto activo. Si un documento es quitado del contexto, desaparece del panel y la vista derecha se limpia automáticamente.
+> **Regla fundamental:** el panel izquierdo muestra documentos seleccionados en el contexto global. Incluye tanto documentos mock como documentos reales de SQLite. Si un documento es quitado del contexto, desaparece del panel y la vista derecha se limpia automáticamente.
 
 Layout dos paneles:
 
 ```
 [Panel izquierdo 268px] │ [Panel derecho flex:1]
-  Search input           │   DocPreview centrado
-  Lista de docs marcados │   (fondo C.surface)
+  Search input           │   InlinePdfViewer (PDFs reales)
+  Lista de docs          │   o DocPreview (otros)
   Footer con conteo      │
 ```
 
-### Estado vacío (sin docs seleccionados)
+### Entrada desde "Ver PDF" / "Ver documento"
 
-Si `selected.length === 0`: icono `ti-eye` + "Marca documentos en el sidebar para visualizarlos".  
-No se muestra el layout de dos paneles.
+Cuando el usuario llega desde click derecho "Ver PDF" o el botón "Ver documento" del modal de vectorización, `VisualizePage` recibe `focusDoc` y auto-selecciona ese documento como activo en el panel derecho. El doc se añade al contexto (`selected`) automáticamente si no estaba.
+
+### Estado vacío
+
+Si no hay docs en el panel (`panelDocs.length === 0`): icono `ti-eye` + "Marca documentos en el sidebar para visualizarlos".
 
 ### Panel izquierdo
 
-- Muestra solo los documentos que están en `selected` (marcados en el sidebar)
-- Search en tiempo real por nombre (filtra dentro de los seleccionados)
+- Muestra `focusDoc` (si llega de "Ver PDF") + documentos en `selected`
+- Incluye documentos reales de SQLite via prop `allRealDocs`
+- Search en tiempo real por nombre
 - Cada ítem: icono tipo + nombre + area · size + TypeBadge
-- Ítem activo resaltado en azul
-- Footer con conteo de documentos filtrados
+- Ítem activo resaltado con borde accent naranja
+- Footer con conteo de documentos
 
-### DocPreview (panel derecho)
+### Panel derecho — lógica de renderizado
+
+| Condición | Render |
+|-----------|--------|
+| Sin doc activo | Empty state ("Selecciona un documento…") |
+| Doc real + tipo `pdf` | `InlinePdfViewer` — iframe con blob URL, ocupa 100% del panel |
+| Cualquier otro doc | `DocPreview` — card con metadatos y placeholder de contenido |
+
+### `InlinePdfViewer`
+
+- `fetch /api/files/:id/view` → blob → `URL.createObjectURL` → `<iframe>`
+- Revoca el blob URL al desmontar (`useEffect` cleanup)
+- Header con nombre y tamaño; spinner mientras carga; mensaje de error si falla
+
+### DocPreview (panel derecho, docs no-PDF)
 
 Renderiza un card centrado (`max-width: 700px`) con:
 
@@ -170,20 +295,22 @@ Renderiza un card centrado (`max-width: 700px`) con:
 |---------|-----------|
 | Header | Icono tipo, nombre, TypeBadge |
 | Meta | Area, Date, Size |
-| Botón | Add to context / Remove context (toggle selección) |
+| Botón | Add to context / Remove context |
 | Weight bar | Progress bar `0–100%` |
 | Stats chips | Links, Graphs, Queries |
-| Content | SpreadsheetView (xlsx/csv) o PdfView (pdf) |
+| Content | SpreadsheetView (xlsx/csv) o PdfView placeholder |
 
-Si "Remove context" es clickeado, el doc desaparece del panel izquierdo y el visor vuelve al estado vacío ("Selecciona un documento para visualizarlo").
+### Sistema de colores por tipo de archivo
 
-### SpreadsheetView
+Aplicado en TypeBadge, iconos de árbol, tarjetas de documentos, nodos del grafo y pills de contexto:
 
-Tabla HTML con cabecera de columnas específicas por documento (`DOC_COLS`) y 9 filas de celdas placeholder (bloques grises de ancho variable).
-
-### PdfView
-
-Secciones con título textual (`DOC_SECTIONS`) y filas de bloques grises simulando párrafos.
+| Tipo | Color UI | Color grafo | Icono |
+|------|----------|-------------|-------|
+| `pdf` | `#c0392b` rojo | `#ea4335` | `ti-file-text` |
+| `xlsx`, `xls` | `#1a7a4a` verde | `#34a853` | `ti-table` |
+| `csv` | `#2a7a4a` verde | `#34a853` | `ti-file-spreadsheet` |
+| `docx`, `doc` | `#0078d4` azul | `#4285f4` | `ti-file-word` |
+| `txt` | `#6b7280` gris | `#9aa0a6` | `ti-file-description` |
 
 ## Vista Policies (`/policies`)
 
