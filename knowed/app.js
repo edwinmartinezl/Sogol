@@ -815,7 +815,7 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
   const [newDeptName,   setNewDeptName]   = useState('');
   const [realDocs,      setRealDocs]      = useState([]);
   const [toast,         setToast]         = useState(null);
-  const [vecModal,      setVecModal]      = useState(null); // { file, resultReady, result, error }
+  const [bulkModal,     setBulkModal]     = useState(null); // { files, deptId, groupId }
   const [modalDoc,      setModalDoc]      = useState(null);
   const [moveDocId,     setMoveDocId]     = useState(null);
   const [pendingFiles,  setPendingFiles]  = useState(null); // File[] waiting for preview confirm
@@ -899,26 +899,12 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
 
   const showToast = msg => { setToast(msg); setTimeout(() => setToast(null), 3000); };
 
-  const doUpload = async (file, targetDeptId = null, targetGroupId = null) => {
-    const slug = coSlug(activeCo, companies);
-    if (!slug) { showToast('Selecciona una empresa primero'); return; }  // local toast OK here
-    setVecModal({ file, resultReady:false, result:null, error:null });
-    try {
-      const result = await apiUpload(file, slug);
-      if (result.error) {
-        setVecModal(m => m ? { ...m, resultReady:true, error:result.error } : null);
-        return;
-      }
-      const norm = normalizeReal(result);
-      const assignDept  = targetDeptId  || nav.deptId  || null;
-      const assignGroup = targetGroupId || nav.groupId || null;
-      setRealDocs(prev => { const next = [norm, ...prev]; onRealDocsChange?.(next); return next; });
-      setAssign(prev => ({ ...prev, [norm.id]: { deptId: assignDept, groupId: assignGroup } }));
-      if (assignDept || assignGroup) apiMoveFile(norm.id, assignDept, assignGroup).catch(() => {});
-      setVecModal(m => m ? { ...m, resultReady:true, result } : null);
-    } catch {
-      setVecModal(m => m ? { ...m, resultReady:true, error:'Server offline' } : null);
-    }
+  const handleFileComplete = (norm, targetDeptId, targetGroupId) => {
+    const assignDept  = targetDeptId  || null;
+    const assignGroup = targetGroupId || null;
+    setRealDocs(prev => { const next = [norm, ...prev]; onRealDocsChange?.(next); return next; });
+    setAssign(prev => ({ ...prev, [norm.id]: { deptId: assignDept, groupId: assignGroup } }));
+    if (assignDept || assignGroup) apiMoveFile(norm.id, assignDept, assignGroup).catch(() => {});
   };
 
   const createDept = async () => {
@@ -1599,19 +1585,20 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
         </div>
       )}
 
-      {/* Vectorizing modal */}
-      {vecModal && (
-        <VectorizingModal
-          file={vecModal.file}
-          resultReady={vecModal.resultReady}
-          result={vecModal.result}
-          error={vecModal.error}
-          onClose={() => setVecModal(null)}
+      {/* Bulk upload modal */}
+      {bulkModal && (
+        <BulkUploadModal
+          files={bulkModal.files}
+          slug={coSlug(activeCo, companies)}
+          deptId={bulkModal.deptId}
+          groupId={bulkModal.groupId}
+          onFileComplete={handleFileComplete}
           onViewPdf={r => {
-            setVecModal(null);
+            setBulkModal(null);
             const doc = realDocs.find(d => d.id === r.id) || normalizeReal(r);
             onGoVisualize?.(doc);
           }}
+          onClose={() => setBulkModal(null)}
         />
       )}
 
@@ -1628,7 +1615,7 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
             onConfirm={() => {
               const files = pendingFiles;
               setPendingFiles(null);
-              files.forEach(f => doUpload(f, nav.deptId, nav.groupId));
+              setBulkModal({ files, deptId: nav.deptId, groupId: nav.groupId });
             }}
           />
         );
@@ -2179,6 +2166,202 @@ function DocModal({ doc, onClose, onRemove }) {
           >
             Close
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Bulk upload modal ─────────────────────────────────────────────────────────
+
+const UPLOAD_STEPS = [
+  { pct:  0, label:'Subiendo...',             ms: 500 },
+  { pct: 20, label:'Extrayendo texto...',      ms: 700 },
+  { pct: 40, label:'Dividiendo en chunks...', ms: 700 },
+  { pct: 60, label:'Generando embeddings...', ms: 800 },
+  { pct: 80, label:'Guardando vectores...',   ms: 600 },
+  { pct:100, label:'¡Listo!',                ms: 300 },
+];
+
+function BulkUploadModal({ files, slug, deptId, groupId, onFileComplete, onViewPdf, onClose }) {
+  const [items,      setItems]      = useState(() =>
+    files.map(f => ({ file:f, status:'pending', pct:0, label:'En espera...', result:null, error:null }))
+  );
+  const [currentIdx, setCurrentIdx] = useState(0);
+
+  const updateItem = (idx, patch) =>
+    setItems(prev => prev.map((it, i) => i === idx ? { ...it, ...patch } : it));
+
+  useEffect(() => {
+    if (currentIdx >= files.length) return;
+    const file = files[currentIdx];
+    const idx  = currentIdx;
+
+    updateItem(idx, { status:'uploading', pct:0, label:'Subiendo...' });
+
+    let cancelled  = false;
+    let animDone   = false;
+    let serverDone = false;
+    let serverResult = null;
+    let serverError  = null;
+
+    const tryFinish = () => {
+      if (!animDone || !serverDone) return;
+      if (serverError) {
+        updateItem(idx, { status:'error', label: serverError });
+      } else {
+        const norm = normalizeReal(serverResult);
+        updateItem(idx, { status:'done', label:'Listo', result: serverResult });
+        onFileComplete(norm, deptId, groupId);
+      }
+      setCurrentIdx(i => i + 1);
+    };
+
+    let stepIdx = 0;
+    const tickAnim = () => {
+      if (cancelled) return;
+      if (stepIdx >= UPLOAD_STEPS.length) { animDone = true; tryFinish(); return; }
+      const { pct, label, ms } = UPLOAD_STEPS[stepIdx++];
+      updateItem(idx, { pct, label });
+      setTimeout(tickAnim, ms);
+    };
+    tickAnim();
+
+    apiUpload(file, slug)
+      .then(r => { if (r.error) serverError = r.error; else serverResult = r; })
+      .catch(() => { serverError = 'Servidor offline'; })
+      .finally(() => { serverDone = true; tryFinish(); });
+
+    return () => { cancelled = true; };
+  }, [currentIdx]);
+
+  const total    = files.length;
+  const doneCnt  = items.filter(it => it.status === 'done' || it.status === 'error').length;
+  const allDone  = doneCnt === total;
+  const overallPct = Math.round((doneCnt / total) * 100);
+  const pdfResult  = allDone ? items.find(it => it.result?.type === 'pdf')?.result : null;
+
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:3000, background:'rgba(0,0,0,0.5)',
+                  display:'flex', alignItems:'center', justifyContent:'center', fontFamily:C.font }}>
+      <div style={{ width:'520px', maxWidth:'calc(100vw - 32px)', background:C.bg,
+                    borderRadius:'16px', overflow:'hidden', boxShadow:'0 24px 80px rgba(0,0,0,0.28)' }}>
+
+        {/* Header */}
+        <div style={{ height:'48px', background:C.accent, display:'flex', alignItems:'center',
+                      padding:'0 20px', gap:'10px', justifyContent:'space-between' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'9px' }}>
+            <i className="ti ti-world" style={{ fontSize:'16px', color:'#fff' }} />
+            <span style={{ fontSize:'13px', fontWeight:600, color:'#fff' }}>
+              Sogol · Procesando {total} archivo{total>1?'s':''}
+            </span>
+          </div>
+          <span style={{ fontSize:'12px', color:'#ffffff99', fontWeight:600 }}>{overallPct}%</span>
+        </div>
+
+        {/* Progress global */}
+        <div style={{ height:'4px', background:C.surface }}>
+          <div style={{ height:'100%', width:overallPct+'%', background:'#1a7a4a',
+                        transition:'width 0.4s ease', borderRadius:'0 2px 2px 0' }} />
+        </div>
+
+        {/* File list */}
+        <div style={{ maxHeight:'380px', overflowY:'auto', padding:'12px 0' }}>
+          {items.map((item, i) => {
+            const ext   = item.file.name.split('.').pop().toLowerCase();
+            const icon  = TYPE_ICON[ext] || 'ti-file';
+            const color = TYPE_COLOR[ext] || C.muted;
+            const isDone    = item.status === 'done';
+            const isError   = item.status === 'error';
+            const isActive  = item.status === 'uploading';
+            const isPending = item.status === 'pending';
+            return (
+              <div key={i} style={{ padding:'10px 20px', borderBottom: i < total-1 ? C.border : 'none' }}>
+                {/* Row 1: icon + name + status badge */}
+                <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
+                  <div style={{ width:'32px', height:'32px', borderRadius:'8px', flexShrink:0,
+                                background:color+'18', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                    <i className={'ti '+icon} style={{ fontSize:'16px', color }} />
+                  </div>
+                  <span style={{ flex:1, fontSize:'13px', fontWeight:500, color:C.text,
+                                 overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
+                        title={item.file.name}>
+                    {item.file.name}
+                  </span>
+                  {isDone && (
+                    <div style={{ width:'22px', height:'22px', borderRadius:'50%', background:'#1a7a4a18',
+                                  border:'1.5px solid #1a7a4a40', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                      <i className="ti ti-check" style={{ fontSize:'12px', color:'#1a7a4a' }} />
+                    </div>
+                  )}
+                  {isError && (
+                    <div style={{ width:'22px', height:'22px', borderRadius:'50%', background:'#fdf2f2',
+                                  border:'1.5px solid #f5c6cb', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                      <i className="ti ti-x" style={{ fontSize:'12px', color:'#c0392b' }} />
+                    </div>
+                  )}
+                  {isActive && (
+                    <div style={{ width:'16px', height:'16px', border:`2px solid ${C.accent}`,
+                                  borderTopColor:'transparent', borderRadius:'50%',
+                                  animation:'spin 0.7s linear infinite', flexShrink:0 }} />
+                  )}
+                  {isPending && (
+                    <div style={{ width:'16px', height:'16px', borderRadius:'50%',
+                                  background:C.surface, border:C.border, flexShrink:0 }} />
+                  )}
+                </div>
+
+                {/* Row 2: progress bar (only while active) */}
+                {isActive && (
+                  <div style={{ marginTop:'8px', paddingLeft:'42px' }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'4px' }}>
+                      <span style={{ fontSize:'11px', color:C.muted }}>{item.label}</span>
+                      <span style={{ fontSize:'11px', fontWeight:600, color:C.accent }}>{item.pct}%</span>
+                    </div>
+                    <div style={{ height:'4px', background:C.surface, borderRadius:'2px', overflow:'hidden' }}>
+                      <div style={{ height:'100%', width:item.pct+'%', background:C.accent,
+                                    borderRadius:'2px', transition:'width 0.35s ease' }} />
+                    </div>
+                  </div>
+                )}
+                {isError && (
+                  <div style={{ marginTop:'4px', paddingLeft:'42px', fontSize:'11px', color:'#c0392b' }}>
+                    {item.error}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Footer */}
+        <div style={{ padding:'16px 20px', borderTop:C.border, display:'flex',
+                      justifyContent:'space-between', alignItems:'center', background:C.surface+'80' }}>
+          <span style={{ fontSize:'12px', color:C.muted }}>
+            {allDone
+              ? `${items.filter(it=>it.status==='done').length} de ${total} completado${total>1?'s':''}`
+              : `Procesando ${currentIdx + 1} de ${total}...`}
+          </span>
+          <div style={{ display:'flex', gap:'8px' }}>
+            {allDone && pdfResult && onViewPdf && (
+              <button onClick={() => onViewPdf(pdfResult)}
+                style={{ padding:'7px 16px', fontSize:'12px', fontWeight:600, background:C.accent,
+                         color:'#fff', border:'none', borderRadius:'9px', cursor:'pointer',
+                         fontFamily:C.font, display:'flex', alignItems:'center', gap:'6px' }}>
+                <i className="ti ti-file-text" style={{ fontSize:'12px' }} /> Ver PDF
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              disabled={!allDone}
+              style={{ padding:'7px 18px', fontSize:'12px', fontWeight:500,
+                       color:    allDone ? C.text : C.muted,
+                       background: allDone ? C.surface : C.surface+'80',
+                       border:  C.border, borderRadius:'9px', cursor: allDone ? 'pointer' : 'default',
+                       fontFamily:C.font, opacity: allDone ? 1 : 0.5 }}>
+              Cerrar
+            </button>
+          </div>
         </div>
       </div>
     </div>
