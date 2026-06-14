@@ -2820,6 +2820,112 @@ function GraphsPage({ selected, onToggle, allRealDocs, docStats, savedGraphs, on
 // ── Visualize page ────────────────────────────────────────────────────────────
 
 function SpreadsheetView({ doc }) {
+  const [sheetData, setSheetData] = React.useState(null);
+  const [loading,   setLoading]   = React.useState(false);
+  const [error,     setError]     = React.useState(null);
+
+  React.useEffect(() => {
+    if (!doc.isReal) return;
+    setLoading(true);
+    setError(null);
+    setSheetData(null);
+    fetch(`${API_BASE}/files/${doc.id}/view`)
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.arrayBuffer(); })
+      .then(buf => {
+        const XLSXLib = window.XLSX;
+        if (!XLSXLib) throw new Error('SheetJS no cargado — recarga la página');
+        const MAX_COLS = 26;
+        const MAX_ROWS = 500;
+        let wb;
+        if (doc.type === 'csv') {
+          const text = new TextDecoder('utf-8').decode(buf);
+          wb = XLSXLib.read(text, { type: 'string' });
+        } else {
+          wb = XLSXLib.read(new Uint8Array(buf), { type: 'array' });
+        }
+        const sheetName = wb.SheetNames[0];
+        const ws   = wb.Sheets[sheetName];
+        const rows = XLSXLib.utils.sheet_to_json(ws, { header: 1, defval: '' });
+        const headers  = (rows[0] || []).slice(0, MAX_COLS).map((h, i) => String(h).trim() || `Col ${i+1}`);
+        const dataRows = rows.slice(1, MAX_ROWS + 1).map(r => headers.map((_, ci) => String(r[ci] ?? '')));
+        setSheetData({ headers, dataRows, totalRows: rows.length - 1, sheetName });
+      })
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
+  }, [doc.id]);
+
+  const thStyle = { padding:'7px 12px', color:C.muted, fontWeight:600, borderBottom:C.border,
+                    textAlign:'left', fontSize:'11px', whiteSpace:'nowrap', background:C.surface,
+                    position:'sticky', top:0 };
+  const tdStyle = { padding:'7px 12px', fontSize:'12px', color:C.text, whiteSpace:'nowrap',
+                    maxWidth:'220px', overflow:'hidden', textOverflow:'ellipsis' };
+  const numStyle = { ...tdStyle, color:C.muted, fontSize:'11px', width:'36px', textAlign:'right',
+                     paddingRight:'16px', userSelect:'none' };
+
+  if (loading) return (
+    <div style={{ display:'flex', alignItems:'center', gap:'10px', padding:'40px 24px', color:C.muted, fontSize:'13px' }}>
+      <div style={{ width:'16px', height:'16px', border:`2px solid ${C.accent}`, borderTopColor:'transparent',
+                    borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
+      Leyendo archivo…
+    </div>
+  );
+
+  if (error) return (
+    <div style={{ padding:'24px', color:'#c0392b', fontSize:'13px' }}>
+      No se pudo leer el archivo: {error}
+    </div>
+  );
+
+  if (sheetData) {
+    const { headers, dataRows, totalRows, sheetName } = sheetData;
+    return (
+      <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
+        {sheetName && (
+          <div style={{ padding:'6px 14px', fontSize:'11px', color:C.muted, borderBottom:C.border,
+                        background:C.surface, flexShrink:0 }}>
+            Hoja: <strong>{sheetName}</strong>
+            {totalRows > dataRows.length && (
+              <span style={{ marginLeft:'12px', color:'#c0392b' }}>
+                Mostrando {dataRows.length} de {totalRows} filas
+              </span>
+            )}
+          </div>
+        )}
+        <div style={{ overflowX:'auto', overflowY:'auto', flex:1 }}>
+          <table style={{ borderCollapse:'collapse', fontSize:'12px', width:'max-content', minWidth:'100%' }}>
+            <thead>
+              <tr>
+                <th style={{ ...thStyle, width:'36px', textAlign:'right', paddingRight:'16px' }}>#</th>
+                {headers.map((h, i) => <th key={i} style={thStyle}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {dataRows.map((row, ri) => (
+                <tr key={ri} style={{ background: ri%2===0 ? C.bg : C.surface+'80',
+                                      borderBottom: ri < dataRows.length-1 ? C.border : 'none' }}>
+                  <td style={numStyle}>{ri+1}</td>
+                  {row.map((cell, ci) => <td key={ci} style={tdStyle} title={cell}>{cell}</td>)}
+                </tr>
+              ))}
+              {dataRows.length === 0 && (
+                <tr><td colSpan={headers.length+1} style={{ padding:'32px', color:C.muted, textAlign:'center', fontSize:'13px' }}>
+                  Sin datos
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        {totalRows > dataRows.length && (
+          <div style={{ padding:'8px 14px', fontSize:'11px', color:C.muted, borderTop:C.border,
+                        background:C.surface, flexShrink:0 }}>
+            {totalRows - dataRows.length} filas adicionales no mostradas
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // skeleton para docs mock (no reales)
   const cols = DOC_COLS[doc.id] || ['Col A', 'Col B', 'Col C', 'Col D'];
   const widths = [78, 62, 88, 54, 72, 84, 58, 68, 76, 50];
   return (
@@ -2827,16 +2933,14 @@ function SpreadsheetView({ doc }) {
       <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'12px' }}>
         <thead>
           <tr style={{ background:C.surface }}>
-            <th style={{ padding:'8px 14px', color:C.muted, fontWeight:600, borderBottom:C.border, textAlign:'left', fontSize:'11px', width:'36px' }}>#</th>
-            {cols.map(col => (
-              <th key={col} style={{ padding:'8px 14px', color:C.muted, fontWeight:600, borderBottom:C.border, textAlign:'left', fontSize:'11px', whiteSpace:'nowrap' }}>{col}</th>
-            ))}
+            <th style={{ ...thStyle, width:'36px' }}>#</th>
+            {cols.map(col => <th key={col} style={thStyle}>{col}</th>)}
           </tr>
         </thead>
         <tbody>
           {Array.from({ length:9 }, (_, row) => (
             <tr key={row} style={{ borderBottom: row < 8 ? C.border : 'none', background: row%2===0 ? C.bg : C.surface+'80' }}>
-              <td style={{ padding:'8px 14px', color:C.muted, fontSize:'11px' }}>{row+1}</td>
+              <td style={numStyle}>{row+1}</td>
               {cols.map((col, j) => (
                 <td key={col} style={{ padding:'9px 14px' }}>
                   <div style={{ height:'9px', borderRadius:'3px', background:'#e5e5ea', width:`${widths[(row*cols.length+j) % widths.length]}%` }} />
@@ -2959,7 +3063,9 @@ function DocPreview({ doc, isSelected, onToggle }) {
             <InlinePdfViewer fileId={doc.id} fileName={doc.name} />
           </div>
         : isSpreadsheet
-          ? <SpreadsheetView doc={doc} />
+          ? <div style={{ height:'65vh', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+              <SpreadsheetView doc={doc} />
+            </div>
           : <PdfView doc={doc} />
       }
     </div>
