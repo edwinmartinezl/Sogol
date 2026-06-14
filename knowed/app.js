@@ -820,7 +820,14 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
   const [moveDocId,     setMoveDocId]     = useState(null);
   const [pendingFiles,  setPendingFiles]  = useState(null); // File[] waiting for preview confirm
   const [deleteDocId,   setDeleteDocId]   = useState(null);
-  const uploadRef = useRef(null);
+  const uploadRef    = useRef(null);
+  const contentRef   = useRef(null);
+  const isMarqueeRef = useRef(false);
+  const mStartRef    = useRef(null);
+  const mDragRef     = useRef(false);
+  const [localSel,    setLocalSel]    = useState([]);
+  const [moveBulkIds, setMoveBulkIds] = useState(null);
+  const [marquee,     setMarquee]     = useState(null);
 
   const allDocs      = [...documents, ...realDocs];
   const q            = search.toLowerCase();
@@ -844,6 +851,8 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
     setCtxMenu({ visible:true, x:e.clientX, y:e.clientY, type, targetId, docIsRealPdf: !!(doc?.isReal && doc?.type === 'pdf'), hasSelected: selected.length > 0 });
   };
   const clearDrag = () => { setDragDocId(null); setDragGroupId(null); setDragOverId(null); };
+
+  useEffect(() => { setLocalSel([]); setMoveBulkIds(null); }, [nav.view, nav.deptId, nav.groupId, activeCo]);
 
   useEffect(() => {
     setNav({ view:'all', deptId:null, groupId:null });
@@ -905,6 +914,53 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
     setRealDocs(prev => { const next = [norm, ...prev]; onRealDocsChange?.(next); return next; });
     setAssign(prev => ({ ...prev, [norm.id]: { deptId: assignDept, groupId: assignGroup } }));
     if (assignDept || assignGroup) apiMoveFile(norm.id, assignDept, assignGroup).catch(() => {});
+  };
+
+  // ── marquee (rubber-band) selection ────────────────────────────────────────
+  const startMarquee = e => {
+    if (e.button !== 0 || !contentRef.current) return;
+    const t = e.target;
+    if (t.closest('[data-docid]') || t.closest('button') || t.closest('input') ||
+        t.tagName === 'TH' || t.tagName === 'TD') return;
+    const r  = contentRef.current.getBoundingClientRect();
+    const x  = e.clientX - r.left;
+    const y  = e.clientY - r.top + contentRef.current.scrollTop;
+    mStartRef.current   = { x, y };
+    isMarqueeRef.current = true;
+    mDragRef.current    = false;
+    setMarquee({ x, y, w:0, h:0 });
+    e.preventDefault();
+  };
+
+  const moveMarquee = e => {
+    if (!isMarqueeRef.current || !mStartRef.current || !contentRef.current) return;
+    const r  = contentRef.current.getBoundingClientRect();
+    const st = contentRef.current.scrollTop;
+    const { x:sx, y:sy } = mStartRef.current;
+    const cx = e.clientX - r.left;
+    const cy = e.clientY - r.top + st;
+    const mx = Math.min(sx, cx), my = Math.min(sy, cy);
+    const mw = Math.abs(cx - sx), mh = Math.abs(cy - sy);
+    if (mw >= 4 || mh >= 4) mDragRef.current = true;
+    setMarquee({ x:mx, y:my, w:mw, h:mh });
+    if (!mDragRef.current) return;
+    const sel = [];
+    contentRef.current.querySelectorAll('[data-docid]').forEach(node => {
+      const nr = node.getBoundingClientRect();
+      const nx = nr.left - r.left, ny = nr.top - r.top + st;
+      if (mx < nx+nr.width && mx+mw > nx && my < ny+nr.height && my+mh > ny)
+        sel.push(node.dataset.docid);
+    });
+    setLocalSel(sel);
+  };
+
+  const endMarquee = () => {
+    if (!isMarqueeRef.current) return;
+    isMarqueeRef.current = false;
+    if (!mDragRef.current) setLocalSel([]);
+    mDragRef.current  = false;
+    mStartRef.current = null;
+    setMarquee(null);
   };
 
   const createDept = async () => {
@@ -974,22 +1030,33 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
   // ── row renderer ─────────────────────────────────────────────────────────
 
   const renderRow = (doc, i, total, showLoc) => {
-    const isSel = selected.includes(doc.id);
+    const isSel      = selected.includes(doc.id);
+    const isLocalSel = localSel.includes(doc.id);
     const a   = assign[doc.id];
     const dep = a ? departments.find(x => x.id === a.deptId) : null;
     const grp = a?.groupId ? groups.find(x => x.id === a.groupId) : null;
     const loc = dep ? (grp ? `${dep.name} › ${grp.name}` : dep.name) : '—';
     return (
       <tr key={doc.id}
+        data-docid={doc.id}
         draggable
         onDragStart={e => { e.stopPropagation(); setDragDocId(doc.id); }}
         onDragEnd={clearDrag}
-        onClick={() => onToggle(doc.id)}
+        onClick={e => {
+          if (e.ctrlKey || e.metaKey) {
+            setLocalSel(prev => prev.includes(doc.id) ? prev.filter(id => id !== doc.id) : [...prev, doc.id]);
+            return;
+          }
+          if (localSel.length > 0) { setLocalSel([]); return; }
+          onToggle(doc.id);
+        }}
         onContextMenu={e => { e.stopPropagation(); openCtx(e, 'doc', doc.id); }}
         style={{
-          background: isSel ? C.accent+'0a' : i%2===0 ? C.bg : '#fafafa',
+          background: isLocalSel ? C.accent+'14' : isSel ? C.accent+'0a' : i%2===0 ? C.bg : '#fafafa',
           cursor:'pointer', borderBottom: i<total-1 ? C.border : 'none',
           opacity: dragDocId===doc.id ? 0.35 : 1,
+          outline: isLocalSel ? `2px solid ${C.accent}` : 'none',
+          outlineOffset: '-2px',
         }}
       >
         <td style={{ padding:'9px 12px', width:'32px' }}>
@@ -1023,21 +1090,30 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
   };
 
   const renderCard = (doc, showLoc = false) => {
-    const isSel = selected.includes(doc.id);
+    const isSel      = selected.includes(doc.id);
+    const isLocalSel = localSel.includes(doc.id);
     const a   = assign[doc.id];
     const dep = a ? departments.find(x => x.id === a.deptId) : null;
     const grp = a?.groupId ? groups.find(x => x.id === a.groupId) : null;
     const loc = dep ? (grp ? `${dep.name} › ${grp.name}` : dep.name) : '—';
     return (
       <div key={doc.id}
+        data-docid={doc.id}
         draggable
         onDragStart={e => { e.stopPropagation(); setDragDocId(doc.id); }}
         onDragEnd={clearDrag}
-        onClick={() => onToggle(doc.id)}
+        onClick={e => {
+          if (e.ctrlKey || e.metaKey) {
+            setLocalSel(prev => prev.includes(doc.id) ? prev.filter(id => id !== doc.id) : [...prev, doc.id]);
+            return;
+          }
+          if (localSel.length > 0) { setLocalSel([]); return; }
+          onToggle(doc.id);
+        }}
         onContextMenu={e => { e.stopPropagation(); openCtx(e, 'doc', doc.id); }}
         style={{
-          background: isSel ? C.accent+'0a' : C.bg,
-          border: isSel ? '1px solid '+C.accent+'50' : C.border,
+          background: isLocalSel ? C.accent+'18' : isSel ? C.accent+'0a' : C.bg,
+          border: isLocalSel ? `2px solid ${C.accent}` : isSel ? '1px solid '+C.accent+'50' : C.border,
           borderRadius:'10px', padding:'10px 12px', cursor:'pointer',
           display:'flex', flexDirection:'column', gap:'6px',
           opacity: dragDocId===doc.id ? 0.35 : 1,
@@ -1520,8 +1596,56 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
       </div>
 
 
+      {/* Bulk selection bar */}
+      {localSel.length > 0 && (
+        <div style={{
+          padding:'8px 24px', background:C.accent+'14', borderBottom:`1px solid ${C.accent}30`,
+          display:'flex', alignItems:'center', gap:'12px', flexShrink:0,
+        }}>
+          <i className="ti ti-files" style={{ fontSize:'14px', color:C.accent }} />
+          <span style={{ fontSize:'12px', fontWeight:600, color:C.accent }}>
+            {localSel.length} archivo{localSel.length>1?'s':''} seleccionado{localSel.length>1?'s':''}
+          </span>
+          <div style={{ flex:1 }} />
+          <button
+            onClick={() => setMoveBulkIds([...localSel])}
+            style={{ display:'flex', alignItems:'center', gap:'6px', padding:'5px 12px', fontSize:'12px',
+                     fontWeight:600, background:C.accent, color:'#fff', border:'none',
+                     borderRadius:'8px', cursor:'pointer', fontFamily:C.font }}>
+            <i className="ti ti-folder-arrow-right" style={{ fontSize:'13px' }} />
+            Mover a carpeta
+          </button>
+          <button
+            onClick={() => setLocalSel([])}
+            style={{ padding:'5px 10px', fontSize:'12px', color:C.muted,
+                     background:'transparent', border:C.border, borderRadius:'8px',
+                     cursor:'pointer', fontFamily:C.font }}>
+            Cancelar
+          </button>
+        </div>
+      )}
+
       {/* Content */}
-      <div style={{ flex:1, overflow:'auto', padding:'20px 24px', display:'flex', flexDirection:'column' }} onContextMenu={e => openCtx(e, nav.view === 'all' ? 'blank' : 'blank_inner')}>{content}</div>
+      <div
+        ref={contentRef}
+        style={{ flex:1, overflow:'auto', padding:'20px 24px', display:'flex', flexDirection:'column', position:'relative' }}
+        onContextMenu={e => openCtx(e, nav.view === 'all' ? 'blank' : 'blank_inner')}
+        onMouseDown={startMarquee}
+        onMouseMove={moveMarquee}
+        onMouseUp={endMarquee}
+        onMouseLeave={endMarquee}
+      >
+        {content}
+        {marquee && marquee.w > 4 && marquee.h > 4 && (
+          <div style={{
+            position:'absolute', pointerEvents:'none', zIndex:50,
+            left:marquee.x+'px', top:marquee.y+'px',
+            width:marquee.w+'px', height:marquee.h+'px',
+            border:`1.5px solid ${C.accent}`,
+            background:C.accent+'14', borderRadius:'3px',
+          }} />
+        )}
+      </div>
 
       {/* Context menu */}
       <ContextMenu menu={ctxMenu} onClose={closeCtx} onAction={handleCtxAction} />
@@ -1647,7 +1771,7 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
         <DocModal doc={modalDoc} onClose={() => setModalDoc(null)} onRemove={onToggle} />
       )}
 
-      {/* Move to folder modal */}
+      {/* Move to folder modal — single doc */}
       {moveDocId && (
         <MoveToModal
           doc={[...documents, ...realDocs].find(d => d.id === moveDocId)}
@@ -1663,20 +1787,44 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
         />
       )}
 
+      {/* Move to folder modal — bulk */}
+      {moveBulkIds && (
+        <MoveToModal
+          bulkDocs={moveBulkIds.map(id => [...documents, ...realDocs].find(d => d.id === id)).filter(Boolean)}
+          departments={departments}
+          groups={groups}
+          onMove={(deptId, groupId) => {
+            moveBulkIds.forEach(id => {
+              setAssign(prev => ({ ...prev, [id]: { deptId, groupId } }));
+              apiMoveFile(id, deptId, groupId).catch(() => {});
+            });
+            setMoveBulkIds(null);
+            setLocalSel([]);
+          }}
+          onClose={() => setMoveBulkIds(null)}
+        />
+      )}
+
     </div>
   );
 }
 
 // ── Move to modal ──────────────────────────────────────────────────────────────
 
-function MoveToModal({ doc, departments, groups, currentAssign, onMove, onClose }) {
+function MoveToModal({ doc, bulkDocs, departments, groups, currentAssign, onMove, onClose }) {
   useEffect(() => {
     const onKey = e => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  if (!doc) return null;
+  const isBulk = !!bulkDocs;
+  if (!isBulk && !doc) return null;
+
+  const title    = isBulk ? `Mover ${bulkDocs.length} archivos` : 'Mover documento';
+  const subtitle = isBulk
+    ? bulkDocs.map(d => d.name).join(', ')
+    : doc.name;
 
   return (
     <div onClick={onClose} style={{
@@ -1689,9 +1837,9 @@ function MoveToModal({ doc, departments, groups, currentAssign, onMove, onClose 
         boxShadow:'0 20px 60px rgba(0,0,0,0.14)', border:C.border,
       }}>
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'16px' }}>
-          <div>
-            <div style={{ fontSize:'14px', fontWeight:600, color:C.text }}>Mover documento</div>
-            <div style={{ fontSize:'11px', color:C.muted, marginTop:'2px', maxWidth:'260px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{doc.name}</div>
+          <div style={{ minWidth:0, flex:1, marginRight:'12px' }}>
+            <div style={{ fontSize:'14px', fontWeight:600, color:C.text }}>{title}</div>
+            <div style={{ fontSize:'11px', color:C.muted, marginTop:'2px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{subtitle}</div>
           </div>
           <button onClick={onClose} style={{ width:'28px', height:'28px', borderRadius:'8px', border:C.border, background:C.surface, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', color:C.muted, flexShrink:0 }}>
             <i className="ti ti-x" style={{ fontSize:'13px' }} />
@@ -1702,8 +1850,9 @@ function MoveToModal({ doc, departments, groups, currentAssign, onMove, onClose 
           {/* Sin departamento */}
           <button onClick={() => onMove(null, null)} style={{
             display:'flex', alignItems:'center', gap:'8px', padding:'8px 10px',
-            borderRadius:'8px', border: !currentAssign?.deptId ? '1px solid '+C.accent : C.border,
-            background: !currentAssign?.deptId ? C.accent+'0e' : 'transparent',
+            borderRadius:'8px',
+            border: !isBulk && !currentAssign?.deptId ? '1px solid '+C.accent : C.border,
+            background: !isBulk && !currentAssign?.deptId ? C.accent+'0e' : 'transparent',
             cursor:'pointer', textAlign:'left', fontFamily:C.font, width:'100%',
           }}>
             <i className="ti ti-inbox" style={{ fontSize:'14px', color:C.muted }} />
@@ -1712,13 +1861,13 @@ function MoveToModal({ doc, departments, groups, currentAssign, onMove, onClose 
 
           {departments.map(dept => {
             const deptGroups = groups.filter(g => g.deptId === dept.id);
-            const isInDept = currentAssign?.deptId === dept.id;
+            const isInDept   = !isBulk && currentAssign?.deptId === dept.id;
             return (
               <div key={dept.id}>
-                {/* Dept row — move to dept root (no group) */}
                 <button onClick={() => onMove(dept.id, null)} style={{
                   display:'flex', alignItems:'center', gap:'8px', padding:'8px 10px',
-                  borderRadius:'8px', border: isInDept && !currentAssign?.groupId ? '1px solid '+C.accent : C.border,
+                  borderRadius:'8px',
+                  border: isInDept && !currentAssign?.groupId ? '1px solid '+C.accent : C.border,
                   background: isInDept && !currentAssign?.groupId ? C.accent+'0e' : 'transparent',
                   cursor:'pointer', textAlign:'left', fontFamily:C.font, width:'100%', marginTop:'2px',
                 }}>
@@ -1726,13 +1875,13 @@ function MoveToModal({ doc, departments, groups, currentAssign, onMove, onClose 
                   <span style={{ fontSize:'12px', fontWeight:600, color:C.text }}>{dept.name}</span>
                 </button>
 
-                {/* Groups within dept */}
                 {deptGroups.map(grp => {
-                  const isHere = currentAssign?.deptId === dept.id && currentAssign?.groupId === grp.id;
+                  const isHere = !isBulk && currentAssign?.deptId === dept.id && currentAssign?.groupId === grp.id;
                   return (
                     <button key={grp.id} onClick={() => onMove(dept.id, grp.id)} style={{
                       display:'flex', alignItems:'center', gap:'8px', padding:'7px 10px 7px 28px',
-                      borderRadius:'8px', border: isHere ? '1px solid '+C.accent : 'transparent',
+                      borderRadius:'8px',
+                      border: isHere ? '1px solid '+C.accent : 'transparent',
                       background: isHere ? C.accent+'0e' : 'transparent',
                       cursor:'pointer', textAlign:'left', fontFamily:C.font, width:'100%',
                     }}>
