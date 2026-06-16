@@ -97,6 +97,11 @@ async function apiDeleteFile(fileId) {
   return res.json();
 }
 
+async function apiGetStorage(companyId) {
+  const res = await fetch(`${API_BASE}/storage?company_id=${encodeURIComponent(companyId)}`);
+  return res.json();
+}
+
 const normalizeReal = r => ({
   id:         r.id,
   name:       r.original_name,
@@ -237,11 +242,12 @@ const CHAT_SESSIONS = [];
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 
 const NAV = [
-  { icon:'ti-files',        label:'Documents',  key:'documents'  },
-  { icon:'ti-eye',          label:'Visualizar', key:'visualize'  },
-  { icon:'ti-chart-bar',    label:'Graphs',     key:'graphs'     },
-  { icon:'ti-messages',     label:'Chat',       key:'chat'       },
-  { icon:'ti-shield-check', label:'Policies',   key:'policies'   },
+  { icon:'ti-files',        label:'Documents',    key:'documents'  },
+  { icon:'ti-eye',          label:'Visualizar',   key:'visualize'  },
+  { icon:'ti-chart-bar',    label:'Graphs',       key:'graphs'     },
+  { icon:'ti-messages',     label:'Chat',         key:'chat'       },
+  { icon:'ti-shield-check', label:'Policies',     key:'policies'   },
+  { icon:'ti-settings',     label:'Configuración',key:'settings'   },
 ];
 
 const DOC_COLS     = {};
@@ -415,7 +421,226 @@ function Sidebar({ page, onNav, selected, onToggle }) {
 
 // ── Topbar ────────────────────────────────────────────────────────────────────
 
-function Topbar({ selected, onRemove, onClearAll, llm, onLlmChange, page, companies, activeCo, onSwitchCo, allRealDocs }) {
+function SelDocsModal({ selected, onToggle, onClearAll, onClose, allRealDocs, departments, groups, assign }) {
+  const [q,              setQ]              = React.useState('');
+  const [expandedDepts,  setExpandedDepts]  = React.useState(() => new Set());
+  const [expandedGroups, setExpandedGroups] = React.useState(() => new Set());
+
+  React.useEffect(() => { setExpandedDepts(new Set((departments||[]).map(d => d.id))); }, [departments]);
+  React.useEffect(() => { setExpandedGroups(new Set((groups||[]).map(g => g.id))); }, [groups]);
+
+  const docPool  = [...documents, ...(allRealDocs || [])];
+  const selDocs  = selected.map(id => docPool.find(d => d.id === id)).filter(Boolean);
+  const fq       = q.toLowerCase();
+  const matchQ   = doc => !fq || doc.name.toLowerCase().includes(fq);
+
+  const docsForGroup = gId => docPool.filter(d => assign?.[d.id]?.groupId === gId && matchQ(d));
+  const looseInDept  = dId => docPool.filter(d => assign?.[d.id]?.deptId === dId && !assign?.[d.id]?.groupId && matchQ(d));
+  const unassigned   = docPool.filter(d => !assign?.[d.id]?.deptId && matchQ(d));
+
+  const toggleDept  = id => setExpandedDepts(s  => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleGroup = id => setExpandedGroups(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const renderDoc = doc => {
+    const isSel = selected.includes(doc.id);
+    return (
+      <div key={doc.id}
+        onClick={() => onToggle(doc.id)}
+        style={{ display:'flex', alignItems:'center', gap:'8px', padding:'5px 10px', borderRadius:'6px', cursor:'pointer' }}
+        onMouseEnter={e => e.currentTarget.style.background = C.surface}
+        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+      >
+        <i className={'ti '+(TYPE_ICON[doc.type]||'ti-file')} style={{ fontSize:'13px', color:TYPE_COLOR[doc.type], flexShrink:0 }} />
+        <span style={{ flex:1, fontSize:'12px', color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={doc.name}>{doc.name}</span>
+        <div style={{
+          width:'18px', height:'18px', borderRadius:'4px', flexShrink:0,
+          display:'flex', alignItems:'center', justifyContent:'center',
+          background: isSel ? C.accent : 'transparent',
+          border: isSel ? 'none' : '1.5px solid #c7c7cc',
+        }}>
+          <i className={isSel ? 'ti ti-check' : 'ti ti-plus'} style={{ fontSize:'10px', color: isSel ? '#fff' : C.muted }} />
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:2000, background:'rgba(0,0,0,0.35)', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:C.font }}
+      onMouseDown={onClose}>
+      <div
+        style={{
+          width:'min(800px, 94vw)', height:'min(640px, 88vh)',
+          background:C.bg, borderRadius:'16px', border:C.border,
+          boxShadow:'0 32px 100px rgba(0,0,0,0.22)',
+          display:'flex', flexDirection:'column', overflow:'hidden',
+        }}
+        onMouseDown={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div style={{ padding:'14px 20px', borderBottom:C.border, display:'flex', alignItems:'center', gap:'10px', flexShrink:0 }}>
+          <i className="ti ti-files" style={{ fontSize:'16px', color:C.accent }} />
+          <span style={{ fontSize:'14px', fontWeight:700, color:C.text }}>Documentos en contexto</span>
+          <span style={{ fontSize:'12px', fontWeight:600, color:C.accent, background:C.accent+'14', borderRadius:'10px', padding:'2px 9px' }}>
+            {selected.length} seleccionado{selected.length !== 1 ? 's' : ''}
+          </span>
+          <div style={{ flex:1 }} />
+          <span onClick={onClose} style={{ cursor:'pointer', color:C.muted, display:'flex', alignItems:'center' }}>
+            <i className="ti ti-x" style={{ fontSize:'17px' }} />
+          </span>
+        </div>
+
+        {/* Body: two columns */}
+        <div style={{ display:'flex', flex:1, overflow:'hidden' }}>
+
+          {/* Left: selected docs */}
+          <div style={{ width:'260px', flexShrink:0, borderRight:C.border, display:'flex', flexDirection:'column' }}>
+            <div style={{ padding:'10px 16px 6px', fontSize:'10px', fontWeight:700, color:C.muted, textTransform:'uppercase', letterSpacing:'0.6px', flexShrink:0 }}>
+              En contexto · {selected.length}
+            </div>
+            <div style={{ flex:1, overflow:'auto', padding:'0 8px' }}>
+              {selDocs.length === 0
+                ? <div style={{ padding:'20px 8px', fontSize:'12px', color:C.muted, fontStyle:'italic', textAlign:'center' }}>
+                    Ningún documento seleccionado.<br />Haz clic en un doc del directorio para agregarlo.
+                  </div>
+                : selDocs.map(doc => (
+                  <div key={doc.id}
+                    style={{ display:'flex', alignItems:'center', gap:'7px', padding:'6px 8px', borderRadius:'6px' }}
+                    onMouseEnter={e => e.currentTarget.style.background = C.surface}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                  >
+                    <i className={'ti '+(TYPE_ICON[doc.type]||'ti-file')} style={{ fontSize:'13px', color:TYPE_COLOR[doc.type], flexShrink:0 }} />
+                    <span style={{ flex:1, fontSize:'12px', color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={doc.name}>{doc.name}</span>
+                    <span onClick={() => onToggle(doc.id)} style={{ cursor:'pointer', color:C.muted, display:'flex', alignItems:'center', padding:'2px', flexShrink:0 }}>
+                      <i className="ti ti-x" style={{ fontSize:'12px' }} />
+                    </span>
+                  </div>
+                ))
+              }
+            </div>
+            <div style={{ padding:'10px 14px', borderTop:C.border, flexShrink:0 }}>
+              <button
+                onClick={() => { onClearAll(); onClose(); }}
+                disabled={selected.length === 0}
+                style={{
+                  width:'100%', padding:'7px', fontSize:'12px', fontWeight:600,
+                  color: selected.length ? '#c0392b' : C.muted,
+                  background: selected.length ? '#c0392b0e' : 'transparent',
+                  border: '0.5px solid ' + (selected.length ? '#c0392b40' : 'transparent'),
+                  borderRadius:'8px', cursor: selected.length ? 'pointer' : 'default',
+                  fontFamily:C.font, display:'flex', alignItems:'center', justifyContent:'center', gap:'5px',
+                }}
+              >
+                <i className="ti ti-trash" style={{ fontSize:'12px' }} />
+                Quitar todos
+              </button>
+            </div>
+          </div>
+
+          {/* Right: directory tree */}
+          <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+            <div style={{ padding:'10px 14px 8px', flexShrink:0 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:'7px', background:C.surface, borderRadius:'8px', padding:'6px 10px', border:C.border }}>
+                <i className="ti ti-search" style={{ fontSize:'12px', color:C.muted, flexShrink:0 }} />
+                <input
+                  autoFocus
+                  value={q}
+                  onChange={e => setQ(e.target.value)}
+                  placeholder="Buscar en el directorio..."
+                  style={{ border:'none', background:'transparent', outline:'none', fontSize:'12px', color:C.text, flex:1, fontFamily:C.font }}
+                />
+                {q && <span onClick={() => setQ('')} style={{ cursor:'pointer', color:C.muted, lineHeight:1, fontSize:'14px' }}>×</span>}
+              </div>
+            </div>
+
+            <div style={{ flex:1, overflow:'auto', padding:'0 8px 16px' }}>
+              {(departments||[]).map(dept => {
+                const dGroups    = (groups||[]).filter(g => g.deptId === dept.id);
+                const looseDocs  = looseInDept(dept.id);
+                const dExpanded  = expandedDepts.has(dept.id);
+                const hasContent = dGroups.some(g => docsForGroup(g.id).length > 0) || looseDocs.length > 0;
+                if (fq && !hasContent) return null;
+                return (
+                  <div key={dept.id} style={{ marginBottom:'2px' }}>
+                    <div
+                      onClick={() => toggleDept(dept.id)}
+                      style={{ display:'flex', alignItems:'center', gap:'7px', padding:'7px 8px', cursor:'pointer', borderRadius:'7px', userSelect:'none' }}
+                      onMouseEnter={e => e.currentTarget.style.background = C.surface}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <i className={`ti ti-chevron-${dExpanded?'down':'right'}`} style={{ fontSize:'11px', color:C.muted, flexShrink:0 }} />
+                      <div style={{ width:'22px', height:'22px', borderRadius:'6px', background:C.accent+'14', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                        <i className={'ti '+(dept.icon||'ti-building')} style={{ fontSize:'12px', color:C.accent }} />
+                      </div>
+                      <span style={{ fontSize:'13px', fontWeight:700, color:C.text }}>{dept.name}</span>
+                      <span style={{ fontSize:'10px', color:C.muted, marginLeft:'auto' }}>
+                        {docPool.filter(d => assign?.[d.id]?.deptId === dept.id).length} docs
+                      </span>
+                    </div>
+                    {dExpanded && (
+                      <div style={{ paddingLeft:'20px' }}>
+                        {dGroups.map(g => {
+                          const gDocs     = docsForGroup(g.id);
+                          const gExpanded = expandedGroups.has(g.id);
+                          if (fq && gDocs.length === 0) return null;
+                          return (
+                            <div key={g.id} style={{ marginBottom:'2px' }}>
+                              <div
+                                onClick={() => toggleGroup(g.id)}
+                                style={{ display:'flex', alignItems:'center', gap:'7px', padding:'5px 8px', cursor:'pointer', borderRadius:'6px', userSelect:'none' }}
+                                onMouseEnter={e => e.currentTarget.style.background = C.surface}
+                                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                              >
+                                <i className={`ti ti-chevron-${gExpanded?'down':'right'}`} style={{ fontSize:'10px', color:C.muted, flexShrink:0 }} />
+                                <i className="ti ti-folder-filled" style={{ fontSize:'14px', color:'#f0a830', flexShrink:0 }} />
+                                <span style={{ fontSize:'12px', fontWeight:600, color:C.text }}>{g.name}</span>
+                                <span style={{ fontSize:'10px', color:C.muted, marginLeft:'auto' }}>{gDocs.length}</span>
+                              </div>
+                              {gExpanded && (
+                                <div style={{ paddingLeft:'18px' }}>
+                                  {gDocs.length === 0
+                                    ? <div style={{ padding:'4px 8px', fontSize:'11px', color:C.muted, fontStyle:'italic' }}>Vacío</div>
+                                    : gDocs.map(renderDoc)
+                                  }
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {looseDocs.map(renderDoc)}
+                        {dGroups.length === 0 && looseDocs.length === 0 && (
+                          <div style={{ padding:'4px 8px', fontSize:'11px', color:C.muted, fontStyle:'italic' }}>Vacío</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {unassigned.length > 0 && (
+                <div style={{ marginTop:'6px' }}>
+                  <div style={{ padding:'6px 8px', fontSize:'10px', fontWeight:700, color:C.muted, textTransform:'uppercase', letterSpacing:'0.6px' }}>
+                    Sin departamento
+                  </div>
+                  {unassigned.map(renderDoc)}
+                </div>
+              )}
+
+              {(departments||[]).length === 0 && unassigned.length === 0 && (
+                <div style={{ padding:'40px', textAlign:'center', fontSize:'12px', color:C.muted }}>
+                  No hay documentos disponibles
+                </div>
+              )}
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Topbar({ selected, onRemove, onClearAll, llm, onLlmChange, page, companies, activeCo, onSwitchCo, allRealDocs, departments, groups, assign }) {
+  const [showSelModal, setShowSelModal] = React.useState(false);
   const n       = selected.length;
   const ec      = n >= 2 ? n * (n - 1) / 2 : 0;
   const docPool = [...documents, ...(allRealDocs||[])];
@@ -447,6 +672,21 @@ function Topbar({ selected, onRemove, onClearAll, llm, onLlmChange, page, compan
             <span style={{ fontSize:'11px', color:'#c7c7cc', fontStyle:'italic', whiteSpace:'nowrap' }}>
               Sin contexto — selecciona docs en Documents
             </span>
+          ) : n > 3 ? (
+            <div
+              onClick={() => setShowSelModal(v => !v)}
+              style={{
+                display:'inline-flex', alignItems:'center', gap:'6px', flexShrink:0,
+                background:C.accent+'14', border:'1px solid '+C.accent+'40',
+                borderRadius:'20px', padding:'4px 12px 4px 10px',
+                fontSize:'12px', color:C.accent, fontWeight:600, cursor:'pointer',
+                userSelect:'none',
+              }}
+            >
+              <i className="ti ti-files" style={{ fontSize:'13px' }} />
+              {n} documentos seleccionados
+              <i className={`ti ti-chevron-${showSelModal?'up':'down'}`} style={{ fontSize:'11px', opacity:0.7 }} />
+            </div>
           ) : (
             <div style={{ display:'flex', alignItems:'center', gap:'5px', overflowX:'auto', flex:1 }}>
               {selected.map(id => {
@@ -490,6 +730,19 @@ function Topbar({ selected, onRemove, onClearAll, llm, onLlmChange, page, compan
       )}
 
       {page !== 'chat' && page !== 'graphs' && <div style={{ flex:1 }} />}
+
+      {showSelModal && page === 'chat' && (
+        <SelDocsModal
+          selected={selected}
+          onToggle={onRemove}
+          onClearAll={onClearAll}
+          onClose={() => setShowSelModal(false)}
+          allRealDocs={allRealDocs}
+          departments={departments}
+          groups={groups}
+          assign={assign}
+        />
+      )}
     </div>
   );
 }
@@ -800,7 +1053,7 @@ function DeleteDocModal({ doc, savedGraphs, onConfirm, onCancel }) {
 
 // ── Documents page ────────────────────────────────────────────────────────────
 
-function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, onNewCo, onSwitchCo, search, onSearch, viewMode, onViewMode, onGlobalToast, onGoVisualize, onRealDocsChange, docStats, savedGraphs }) {
+function DocumentsPage({ selected, onToggle, onClearAll, onSetSelected, activeCo, companies, onNewCo, onSwitchCo, search, onSearch, viewMode, onViewMode, onGlobalToast, onGoVisualize, onRealDocsChange, onDeptsChange, onGroupsChange, onAssignChange, docStats, savedGraphs }) {
   const [nav,         setNav]         = useState({ view:'all', deptId:null, groupId:null });
   const [assign,      setAssign]      = useState(TREE.docAssignments);
   const [groups,      setGroups]      = useState([...TREE.groups]);
@@ -825,9 +1078,13 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
   const isMarqueeRef = useRef(false);
   const mStartRef    = useRef(null);
   const mDragRef     = useRef(false);
-  const [localSel,    setLocalSel]    = useState([]);
-  const [moveBulkIds, setMoveBulkIds] = useState(null);
-  const [marquee,     setMarquee]     = useState(null);
+  const [showBulkMove,    setShowBulkMove]    = useState(false);
+  const [marquee,         setMarquee]         = useState(null);
+  const [collapsedGroups, setCollapsedGroups] = useState({});
+
+  useEffect(() => { onDeptsChange?.(departments); }, [departments]);
+  useEffect(() => { onGroupsChange?.(groups); }, [groups]);
+  useEffect(() => { onAssignChange?.(assign); }, [assign]);
 
   const allDocs      = [...documents, ...realDocs];
   const q            = search.toLowerCase();
@@ -851,8 +1108,6 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
     setCtxMenu({ visible:true, x:e.clientX, y:e.clientY, type, targetId, docIsRealPdf: !!(doc?.isReal && doc?.type === 'pdf'), hasSelected: selected.length > 0 });
   };
   const clearDrag = () => { setDragDocId(null); setDragGroupId(null); setDragOverId(null); };
-
-  useEffect(() => { setLocalSel([]); setMoveBulkIds(null); }, [nav.view, nav.deptId, nav.groupId, activeCo]);
 
   useEffect(() => {
     setNav({ view:'all', deptId:null, groupId:null });
@@ -896,8 +1151,14 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
     e.preventDefault();
     if (dragDocId) {
       const g = tGroupId || null;
-      setAssign(prev => ({ ...prev, [dragDocId]: { deptId:tDeptId, groupId:g } }));
-      apiMoveFile(dragDocId, tDeptId, g).catch(() => {});
+      const idsToMove = (selected.length > 0 && selected.includes(dragDocId)) ? selected : [dragDocId];
+      setAssign(prev => {
+        const next = { ...prev };
+        idsToMove.forEach(id => { next[id] = { deptId:tDeptId, groupId:g }; });
+        return next;
+      });
+      idsToMove.forEach(id => apiMoveFile(id, tDeptId, g).catch(() => {}));
+      if (idsToMove.length > 1) onSetSelected([]);
       setDragDocId(null);
     } else if (dragGroupId && !tGroupId) {
       setGroups(prev => prev.map(g => g.id === dragGroupId ? { ...g, deptId:tDeptId } : g));
@@ -920,7 +1181,8 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
   const startMarquee = e => {
     if (e.button !== 0 || !contentRef.current) return;
     const t = e.target;
-    if (t.closest('[data-docid]') || t.closest('button') || t.closest('input') ||
+    if (t.closest('[data-docid]') || t.closest('[data-no-marquee]') ||
+        t.closest('button') || t.closest('input') ||
         t.tagName === 'TH' || t.tagName === 'TD') return;
     const r  = contentRef.current.getBoundingClientRect();
     const x  = e.clientX - r.left;
@@ -951,13 +1213,13 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
       if (mx < nx+nr.width && mx+mw > nx && my < ny+nr.height && my+mh > ny)
         sel.push(node.dataset.docid);
     });
-    setLocalSel(sel);
+    onSetSelected(sel);
   };
 
   const endMarquee = () => {
     if (!isMarqueeRef.current) return;
     isMarqueeRef.current = false;
-    if (!mDragRef.current) setLocalSel([]);
+    if (!mDragRef.current) onSetSelected([]);
     mDragRef.current  = false;
     mStartRef.current = null;
     setMarquee(null);
@@ -1030,8 +1292,7 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
   // ── row renderer ─────────────────────────────────────────────────────────
 
   const renderRow = (doc, i, total, showLoc) => {
-    const isSel      = selected.includes(doc.id);
-    const isLocalSel = localSel.includes(doc.id);
+    const isSel = selected.includes(doc.id);
     const a   = assign[doc.id];
     const dep = a ? departments.find(x => x.id === a.deptId) : null;
     const grp = a?.groupId ? groups.find(x => x.id === a.groupId) : null;
@@ -1042,20 +1303,13 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
         draggable
         onDragStart={e => { e.stopPropagation(); setDragDocId(doc.id); }}
         onDragEnd={clearDrag}
-        onClick={e => {
-          if (e.ctrlKey || e.metaKey) {
-            setLocalSel(prev => prev.includes(doc.id) ? prev.filter(id => id !== doc.id) : [...prev, doc.id]);
-            return;
-          }
-          if (localSel.length > 0) { setLocalSel([]); return; }
-          onToggle(doc.id);
-        }}
+        onClick={e => { e.ctrlKey || e.metaKey ? onToggle(doc.id) : onSetSelected([doc.id]); }}
         onContextMenu={e => { e.stopPropagation(); openCtx(e, 'doc', doc.id); }}
         style={{
-          background: isLocalSel ? C.accent+'14' : isSel ? C.accent+'0a' : i%2===0 ? C.bg : '#fafafa',
+          background: isSel ? C.accent+'14' : i%2===0 ? C.bg : '#fafafa',
           cursor:'pointer', borderBottom: i<total-1 ? C.border : 'none',
-          opacity: dragDocId===doc.id ? 0.35 : 1,
-          outline: isLocalSel ? `2px solid ${C.accent}` : 'none',
+          opacity: dragDocId && (dragDocId===doc.id || (selected.includes(doc.id) && selected.includes(dragDocId))) ? 0.35 : 1,
+          outline: isSel ? `2px solid ${C.accent}` : 'none',
           outlineOffset: '-2px',
         }}
       >
@@ -1090,8 +1344,7 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
   };
 
   const renderCard = (doc, showLoc = false) => {
-    const isSel      = selected.includes(doc.id);
-    const isLocalSel = localSel.includes(doc.id);
+    const isSel = selected.includes(doc.id);
     const a   = assign[doc.id];
     const dep = a ? departments.find(x => x.id === a.deptId) : null;
     const grp = a?.groupId ? groups.find(x => x.id === a.groupId) : null;
@@ -1102,21 +1355,14 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
         draggable
         onDragStart={e => { e.stopPropagation(); setDragDocId(doc.id); }}
         onDragEnd={clearDrag}
-        onClick={e => {
-          if (e.ctrlKey || e.metaKey) {
-            setLocalSel(prev => prev.includes(doc.id) ? prev.filter(id => id !== doc.id) : [...prev, doc.id]);
-            return;
-          }
-          if (localSel.length > 0) { setLocalSel([]); return; }
-          onToggle(doc.id);
-        }}
+        onClick={e => { e.ctrlKey || e.metaKey ? onToggle(doc.id) : onSetSelected([doc.id]); }}
         onContextMenu={e => { e.stopPropagation(); openCtx(e, 'doc', doc.id); }}
         style={{
-          background: isLocalSel ? C.accent+'18' : isSel ? C.accent+'0a' : C.bg,
-          border: isLocalSel ? `2px solid ${C.accent}` : isSel ? '1px solid '+C.accent+'50' : C.border,
+          background: isSel ? C.accent+'18' : C.bg,
+          border: isSel ? `2px solid ${C.accent}` : C.border,
           borderRadius:'10px', padding:'10px 12px', cursor:'pointer',
           display:'flex', flexDirection:'column', gap:'6px',
-          opacity: dragDocId===doc.id ? 0.35 : 1,
+          opacity: dragDocId && (dragDocId===doc.id || (selected.includes(doc.id) && selected.includes(dragDocId))) ? 0.35 : 1,
           transition:'border-color .15s, background .15s',
         }}
       >
@@ -1229,19 +1475,34 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
       </div>
     );
 
-    const GroupHeader = ({ grp, count }) => (
-      <div style={{
-        display:'flex', alignItems:'center', gap:'7px',
-        padding:'8px 0 6px', marginTop:'12px', marginBottom:'2px',
-      }}>
-        <i className="ti ti-folder-filled" style={{ fontSize:'14px', color:'#92400e' }} />
-        <span style={{ fontSize:'12px', fontWeight:600, color:'#78350f', textTransform:'uppercase', letterSpacing:'0.5px' }}>{grp.name}</span>
-        <span style={{
-          fontSize:'10px', color:C.muted, background:C.surface,
-          borderRadius:'20px', padding:'1px 6px', fontWeight:600,
-        }}>{count}</span>
-      </div>
-    );
+    const toggleGroupCollapse = id => setCollapsedGroups(prev => {
+      const next = Object.assign({}, prev);
+      if (next[id]) delete next[id]; else next[id] = true;
+      return next;
+    });
+
+    const GroupHeader = ({ grp, count }) => {
+      const collapsed = !!collapsedGroups[grp.id];
+      return (
+        <div data-no-marquee style={{
+          display:'flex', alignItems:'center', gap:'7px',
+          padding:'8px 0 6px', marginTop:'12px', marginBottom:'2px',
+          cursor: viewMode === 'list' ? 'pointer' : 'default',
+          userSelect:'none',
+        }} onClick={viewMode === 'list' ? () => toggleGroupCollapse(grp.id) : undefined}>
+          <i className="ti ti-folder-filled" style={{ fontSize:'14px', color:'#92400e' }} />
+          <span style={{ fontSize:'12px', fontWeight:600, color:'#78350f', textTransform:'uppercase', letterSpacing:'0.5px' }}>{grp.name}</span>
+          <span style={{
+            fontSize:'10px', color:C.muted, background:C.surface,
+            borderRadius:'20px', padding:'1px 6px', fontWeight:600,
+          }}>{count}</span>
+          {viewMode === 'list' && (
+            <i className={'ti '+(collapsed ? 'ti-chevron-right' : 'ti-chevron-down')}
+               style={{ fontSize:'11px', color:C.muted, marginLeft:'auto' }} />
+          )}
+        </div>
+      );
+    };
 
     const sectionDepts = departments.filter(dep => {
       if (docsForDept(dep.id).filter(filt).length > 0) return true;
@@ -1261,10 +1522,11 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
               <DeptHeader dept={dept} />
               {deptGroupsWithDocs.map(grp => {
                 const grpDocs = docsForGroup(grp.id).filter(filt);
+                const isGrpCollapsed = !!collapsedGroups[grp.id];
                 return (
                   <div key={grp.id} style={{ marginLeft:'16px' }}>
                     <GroupHeader grp={grp} count={grpDocs.length} />
-                    <div style={{ marginLeft:'4px' }}>{renderDocs(grpDocs, false)}</div>
+                    {!isGrpCollapsed && <div style={{ marginLeft:'4px' }}>{renderDocs(grpDocs, false)}</div>}
                   </div>
                 );
               })}
@@ -1376,6 +1638,7 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
             const isOver  = dragOverId === dep.id;
             return (
               <div key={dep.id}
+                data-no-marquee
                 onClick={() => goTo('dept', dep.id)}
                 onContextMenu={e => { e.stopPropagation(); openCtx(e, 'folder', dep.id); }}
                 onDragOver={e => { e.preventDefault(); setDragOverId(dep.id); }}
@@ -1458,6 +1721,7 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
                 const isOver = dragOverId === g.id;
                 return (
                   <div key={g.id}
+                    data-no-marquee
                     draggable
                     onClick={() => goTo('group', nav.deptId, g.id)}
                     onContextMenu={e => { e.stopPropagation(); openCtx(e, 'folder', g.id); }}
@@ -1597,18 +1861,18 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
 
 
       {/* Bulk selection bar */}
-      {localSel.length > 0 && (
+      {selected.length > 0 && (
         <div style={{
           padding:'8px 24px', background:C.accent+'14', borderBottom:`1px solid ${C.accent}30`,
           display:'flex', alignItems:'center', gap:'12px', flexShrink:0,
         }}>
           <i className="ti ti-files" style={{ fontSize:'14px', color:C.accent }} />
           <span style={{ fontSize:'12px', fontWeight:600, color:C.accent }}>
-            {localSel.length} archivo{localSel.length>1?'s':''} seleccionado{localSel.length>1?'s':''}
+            {selected.length} archivo{selected.length>1?'s':''} seleccionado{selected.length>1?'s':''}
           </span>
           <div style={{ flex:1 }} />
           <button
-            onClick={() => setMoveBulkIds([...localSel])}
+            onClick={() => setShowBulkMove(true)}
             style={{ display:'flex', alignItems:'center', gap:'6px', padding:'5px 12px', fontSize:'12px',
                      fontWeight:600, background:C.accent, color:'#fff', border:'none',
                      borderRadius:'8px', cursor:'pointer', fontFamily:C.font }}>
@@ -1616,7 +1880,7 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
             Mover a carpeta
           </button>
           <button
-            onClick={() => setLocalSel([])}
+            onClick={() => onSetSelected([])}
             style={{ padding:'5px 10px', fontSize:'12px', color:C.muted,
                      background:'transparent', border:C.border, borderRadius:'8px',
                      cursor:'pointer', fontFamily:C.font }}>
@@ -1788,20 +2052,19 @@ function DocumentsPage({ selected, onToggle, onClearAll, activeCo, companies, on
       )}
 
       {/* Move to folder modal — bulk */}
-      {moveBulkIds && (
+      {showBulkMove && (
         <MoveToModal
-          bulkDocs={moveBulkIds.map(id => [...documents, ...realDocs].find(d => d.id === id)).filter(Boolean)}
+          bulkDocs={selected.map(id => [...documents, ...realDocs].find(d => d.id === id)).filter(Boolean)}
           departments={departments}
           groups={groups}
           onMove={(deptId, groupId) => {
-            moveBulkIds.forEach(id => {
+            selected.forEach(id => {
               setAssign(prev => ({ ...prev, [id]: { deptId, groupId } }));
               apiMoveFile(id, deptId, groupId).catch(() => {});
             });
-            setMoveBulkIds(null);
-            setLocalSel([]);
+            setShowBulkMove(false);
           }}
-          onClose={() => setMoveBulkIds(null)}
+          onClose={() => setShowBulkMove(false)}
         />
       )}
 
@@ -3787,6 +4050,197 @@ function PoliciesPage() {
   );
 }
 
+// ── Settings page ─────────────────────────────────────────────────────────────
+
+const STORAGE_LIMIT = 1073741824; // 1 GB — plan free
+
+const TYPE_LABELS = {
+  pdf:'PDF', xlsx:'Excel', xls:'Excel', csv:'CSV', docx:'Word', doc:'Word', txt:'Texto',
+};
+
+function SettingsPage({ activeCo, companies, allRealDocs }) {
+  const [storage, setStorage] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const slug = coSlug(activeCo, companies);
+
+  useEffect(() => {
+    const s = coSlug(activeCo, companies);
+    if (!s) return;
+    setLoading(true);
+    apiGetStorage(s)
+      .then(d => (d && typeof d.totalBytes === 'number') ? setStorage(d) : setStorage(null))
+      .catch(() => setStorage(null))
+      .finally(() => setLoading(false));
+  }, [activeCo, companies, allRealDocs]);
+
+  const formatBytes = b => {
+    if (!b) return '0 B';
+    if (b >= 1073741824) return (b / 1073741824).toFixed(1) + ' GB';
+    if (b >= 1048576)    return (b / 1048576).toFixed(1)    + ' MB';
+    if (b >= 1024)       return (b / 1024).toFixed(1)       + ' KB';
+    return b + ' B';
+  };
+
+  const totalBytes = storage?.totalBytes || 0;
+  const pct        = Math.min(100, (totalBytes / STORAGE_LIMIT) * 100);
+  const overLimit  = totalBytes > STORAGE_LIMIT;
+  const nearLimit  = pct >= 90;
+  const barColor   = (overLimit || nearLimit) ? '#dc2626' : C.accent;
+  const byType     = storage?.byType || {};
+  const typeEntries = Object.entries(byType).sort(([,a],[,b]) => b.bytes - a.bytes);
+
+  const SectionLabel = ({ children }) => (
+    <div style={{ fontSize:'11px', fontWeight:700, color:C.muted, textTransform:'uppercase', letterSpacing:'0.7px', marginBottom:'8px' }}>
+      {children}
+    </div>
+  );
+
+  const Card = ({ children, style }) => (
+    <div style={{ background:C.bg, border:C.border, borderRadius:'14px', padding:'24px 28px', marginBottom:'16px', ...style }}>
+      {children}
+    </div>
+  );
+
+  return (
+    <div style={{ flex:1, overflow:'auto', background:C.surface, fontFamily:C.font }}>
+      <div style={{ maxWidth:'720px', margin:'0 auto', padding:'40px 24px' }}>
+
+        {/* Page header */}
+        <div style={{ marginBottom:'32px' }}>
+          <h1 style={{ fontSize:'22px', fontWeight:700, color:C.text, margin:0, letterSpacing:'-0.3px' }}>Configuración</h1>
+          <p style={{ fontSize:'13px', color:C.muted, margin:'5px 0 0', lineHeight:'1.6' }}>
+            Gestiona tu plan y el uso de almacenamiento.
+          </p>
+        </div>
+
+        {/* ── Plan ── */}
+        <SectionLabel>Plan</SectionLabel>
+        <Card>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:'16px' }}>
+            <div>
+              <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'6px' }}>
+                <span style={{ fontSize:'17px', fontWeight:700, color:C.text }}>Plan Free</span>
+                <span style={{ fontSize:'11px', fontWeight:600, padding:'2px 10px', background:C.accent+'14', color:C.accent, borderRadius:'20px' }}>Activo</span>
+              </div>
+              <div style={{ fontSize:'13px', color:C.muted, lineHeight:'1.6' }}>
+                1 GB de almacenamiento · Documentos ilimitados · 1 empresa
+              </div>
+            </div>
+            <button style={{
+              flexShrink:0, padding:'9px 22px', fontSize:'13px', fontWeight:600,
+              background:C.accent, color:'#fff', border:'none', borderRadius:'10px',
+              cursor:'pointer', fontFamily:C.font,
+            }}>
+              Actualizar plan
+            </button>
+          </div>
+        </Card>
+
+        {/* ── Storage ── */}
+        <SectionLabel style={{ marginTop:'24px' }}>Almacenamiento</SectionLabel>
+        <Card>
+          {!slug ? (
+            <div style={{ fontSize:'13px', color:C.muted }}>Selecciona una empresa para ver el uso de almacenamiento.</div>
+          ) : loading ? (
+            <div style={{ padding:'24px 0', textAlign:'center', color:C.muted, fontSize:'13px' }}>Cargando…</div>
+          ) : (
+            <>
+              {/* Usage headline */}
+              <div style={{ display:'flex', alignItems:'baseline', gap:'8px', marginBottom:'14px' }}>
+                <span style={{ fontSize:'26px', fontWeight:700, color:C.text, letterSpacing:'-0.5px' }}>
+                  {formatBytes(totalBytes)}
+                </span>
+                <span style={{ fontSize:'14px', color:C.muted }}>de {formatBytes(STORAGE_LIMIT)} usados</span>
+              </div>
+
+              {/* Progress bar */}
+              <div style={{ height:'10px', borderRadius:'5px', background:C.surface, overflow:'hidden', marginBottom:'8px' }}>
+                <div style={{
+                  height:'100%', borderRadius:'5px',
+                  width: pct.toFixed(2) + '%', minWidth: pct > 0 ? '6px' : '0',
+                  background: barColor, transition:'width 0.4s ease',
+                }} />
+              </div>
+              <div style={{ display:'flex', justifyContent:'space-between', fontSize:'12px', color:C.muted }}>
+                <span>{pct.toFixed(1)}% utilizado</span>
+                <span>{formatBytes(STORAGE_LIMIT - totalBytes)} disponible</span>
+              </div>
+
+              {overLimit && (
+                <div style={{
+                  marginTop:'12px', padding:'9px 14px', background:'#dc262610',
+                  border:'1px solid #dc262640', borderRadius:'9px',
+                  fontSize:'12px', fontWeight:600, color:'#dc2626',
+                  display:'flex', alignItems:'center', gap:'8px',
+                }}>
+                  <i className="ti ti-alert-triangle" style={{ fontSize:'14px' }} />
+                  Has alcanzado el límite de tu plan
+                </div>
+              )}
+
+              {/* Divider */}
+              <div style={{ borderTop:C.border, margin:'22px 0 18px' }} />
+
+              {/* By type */}
+              {typeEntries.length === 0 ? (
+                <div style={{ fontSize:'13px', color:C.muted, fontStyle:'italic' }}>No hay documentos subidos aún.</div>
+              ) : typeEntries.map(([type, { count, bytes }]) => {
+                const typePct = totalBytes > 0 ? (bytes / totalBytes) * 100 : 0;
+                return (
+                  <div key={type} style={{
+                    display:'flex', alignItems:'center', gap:'14px',
+                    padding:'10px 0', borderBottom:C.border,
+                  }}>
+                    <div style={{
+                      width:'36px', height:'36px', flexShrink:0, borderRadius:'9px',
+                      background:(TYPE_COLOR[type]||C.muted)+'18',
+                      display:'flex', alignItems:'center', justifyContent:'center',
+                    }}>
+                      <i className={'ti '+(TYPE_ICON[type]||'ti-file')} style={{ fontSize:'17px', color:TYPE_COLOR[type]||C.muted }} />
+                    </div>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'5px' }}>
+                        <span style={{ fontSize:'13px', fontWeight:500, color:C.text }}>
+                          {TYPE_LABELS[type] || type.toUpperCase()}
+                        </span>
+                        <div style={{ display:'flex', gap:'20px', alignItems:'center' }}>
+                          <span style={{ fontSize:'12px', color:C.muted }}>{count} documento{count !== 1 ? 's' : ''}</span>
+                          <span style={{ fontSize:'12px', fontWeight:600, color:C.text, minWidth:'60px', textAlign:'right' }}>
+                            {formatBytes(bytes)}
+                          </span>
+                        </div>
+                      </div>
+                      <div style={{ height:'4px', borderRadius:'2px', background:C.surface, overflow:'hidden' }}>
+                        <div style={{
+                          height:'100%', borderRadius:'2px',
+                          width: typePct.toFixed(2)+'%', minWidth: typePct > 0 ? '4px' : '0',
+                          background: TYPE_COLOR[type]||C.muted, transition:'width 0.4s ease',
+                        }} />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Footer total */}
+              {storage?.totalDocs > 0 && (
+                <div style={{
+                  display:'flex', justifyContent:'space-between',
+                  paddingTop:'14px', fontSize:'12px', fontWeight:600, color:C.muted,
+                }}>
+                  <span>Total: {storage.totalDocs} documento{storage.totalDocs !== 1 ? 's' : ''}</span>
+                  <span>{formatBytes(totalBytes)}</span>
+                </div>
+              )}
+            </>
+          )}
+        </Card>
+
+      </div>
+    </div>
+  );
+}
+
 // ── Login page ────────────────────────────────────────────────────────────────
 
 function LoginPage({ onLogin }) {
@@ -4042,6 +4496,9 @@ function App() {
   const [serverOnline,      setServerOnline]      = useState(null); // null=unknown, true, false
   const [visualizeFocusDoc, setVisualizeFocusDoc] = useState(null);
   const [appRealDocs,       setAppRealDocs]       = useState([]);
+  const [appDepts,          setAppDepts]          = useState([]);
+  const [appGroups,         setAppGroups]         = useState([]);
+  const [appAssign,         setAppAssign]         = useState({});
 
   const showAppToast = (msg, type = 'info') => {
     setAppToast({ msg, type });
@@ -4052,7 +4509,11 @@ function App() {
     apiGetCompanies()
       .then(rows => {
         setServerOnline(true);
-        if (Array.isArray(rows)) setCompanies(rows.map(r => ({ id:r.id, name:r.name, slug:r.slug })));
+        if (Array.isArray(rows)) {
+          const mapped = rows.map(r => ({ id:r.id, name:r.name, slug:r.slug }));
+          setCompanies(mapped);
+          setActiveCo(prev => prev || (mapped[0]?.id ?? null));
+        }
       })
       .catch(() => {
         setServerOnline(false);
@@ -4168,6 +4629,7 @@ function App() {
             page={page}
             companies={companies} activeCo={activeCo} onSwitchCo={switchCo}
             allRealDocs={appRealDocs}
+            departments={appDepts} groups={appGroups} assign={appAssign}
           />
         )}
         {showNewCo && (
@@ -4191,7 +4653,7 @@ function App() {
         )}
         <div style={{ flex:1, display:'flex', overflow:'hidden' }}>
           {page === 'documents' && (
-            <DocumentsPage selected={selected} onToggle={toggle} onClearAll={clearAll} activeCo={activeCo} companies={companies} onNewCo={() => setShowNewCo(true)} onSwitchCo={switchCo} search={docSearch} onSearch={setDocSearch} viewMode={docViewMode} onViewMode={setDocViewMode} onGlobalToast={showAppToast} onGoVisualize={onGoVisualize} onRealDocsChange={setAppRealDocs} docStats={docStats} savedGraphs={savedGraphs} />
+            <DocumentsPage selected={selected} onToggle={toggle} onClearAll={clearAll} onSetSelected={setSelected} activeCo={activeCo} companies={companies} onNewCo={() => setShowNewCo(true)} onSwitchCo={switchCo} search={docSearch} onSearch={setDocSearch} viewMode={docViewMode} onViewMode={setDocViewMode} onGlobalToast={showAppToast} onGoVisualize={onGoVisualize} onRealDocsChange={setAppRealDocs} onDeptsChange={setAppDepts} onGroupsChange={setAppGroups} onAssignChange={setAppAssign} docStats={docStats} savedGraphs={savedGraphs} />
           )}
           {page === 'visualize' && (
             <VisualizePage selected={selected} onToggle={toggle} focusDoc={visualizeFocusDoc} allRealDocs={appRealDocs} />
@@ -4208,6 +4670,7 @@ function App() {
             />
           )}
           {page === 'policies' && <PoliciesPage />}
+          {page === 'settings' && <SettingsPage activeCo={activeCo} companies={companies} allRealDocs={appRealDocs} />}
         </div>
       </div>
     </div>

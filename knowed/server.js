@@ -310,6 +310,28 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 201, record);
   }
 
+  // ── GET /api/storage?company_id= ─────────────────────────────────────────
+  if (req.method === 'GET' && pathname === '/api/storage') {
+    const company_id = qp.get('company_id');
+    if (!company_id) return sendJson(res, 400, { error: 'company_id required' });
+
+    const LIMIT = 1073741824; // 1 GB — plan free
+    const rows = db.prepare(
+      'SELECT type, COUNT(*) as count, SUM(size_bytes) as bytes FROM files WHERE company_id=? GROUP BY type'
+    ).all(company_id);
+
+    const byType = {};
+    let totalBytes = 0;
+    let totalDocs  = 0;
+    rows.forEach(r => {
+      byType[r.type] = { count: r.count, bytes: r.bytes || 0 };
+      totalBytes += r.bytes || 0;
+      totalDocs  += r.count;
+    });
+
+    return sendJson(res, 200, { totalBytes, limitBytes: LIMIT, byType, totalDocs });
+  }
+
   // ── GET /api/ping ─────────────────────────────────────────────────────────
   if (req.method === 'GET' && pathname === '/api/ping') {
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(t => t.name);
@@ -319,17 +341,41 @@ const server = http.createServer(async (req, res) => {
   sendJson(res, 404, { error: `No route: ${req.method} ${pathname}` });
 });
 
-// ── GET /api/ping ─────────────────────────────────────────────────────────────
-// (reached before 404 handler so insert here just before server.listen)
+const EXT_CT = {
+  '.html': 'text/html; charset=utf-8',
+  '.js':   'text/javascript; charset=utf-8',
+  '.css':  'text/css; charset=utf-8',
+  '.ico':  'image/x-icon',
+  '.png':  'image/png',
+  '.svg':  'image/svg+xml',
+};
+
+const staticServer = http.createServer((req, res) => {
+  const urlPath = new URL(req.url, 'http://localhost').pathname;
+  const filePath = urlPath === '/' ? path.join(ROOT, 'index.html') : path.join(ROOT, urlPath);
+  const ext = path.extname(filePath).toLowerCase();
+  try {
+    const data = fs.readFileSync(filePath);
+    res.writeHead(200, { 'Content-Type': EXT_CT[ext] || 'text/plain', 'Content-Length': Buffer.byteLength(data) });
+    res.end(data);
+  } catch {
+    const idx = fs.readFileSync(path.join(ROOT, 'index.html'));
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': Buffer.byteLength(idx) });
+    res.end(idx);
+  }
+});
 
 server.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════════╗');
   console.log('║     Sogol API  v2  (companies + depts)   ║');
   console.log('╚══════════════════════════════════════════╝');
-  console.log(`   URL  →  http://localhost:${PORT}`);
-  console.log(`   DB   →  ${DB_PATH}`);
+  console.log(`   API    →  http://localhost:${PORT}`);
+  console.log(`   App    →  http://localhost:3000`);
+  console.log(`   DB     →  ${DB_PATH}`);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(t => t.name);
   console.log(`   Tables: ${tables.join(', ')}`);
   console.log('');
 });
+
+staticServer.listen(3000);

@@ -4,7 +4,7 @@
 
 El sidebar tiene tres zonas verticales:
 
-1. **Nav** — 5 ítems de navegación (Documents, Visualizar, Graphs, Chat, Policies)
+1. **Nav** — 6 ítems de navegación (Documents, Visualizar, Graphs, Chat, Policies, Configuración)
 2. **This month** — documentos cuya `date` pertenece al mes actual; cada ítem es un `DocItem` toggleable
 3. **Older** — historial de sesiones de chat pasadas (`CHAT_SESSIONS`); los documentos de cada sesión siempre están disponibles para añadir al contexto activo
 
@@ -485,3 +485,84 @@ Cada card muestra:
 > "El LLM solo accede a vectores de los documentos permitidos por esta política. El control se aplica en la capa de datos, no en el modelo."
 
 El acceso no se controla diciéndole al LLM qué puede o no puede decir — se controla qué datos llegan al LLM. Si un documento no está en la política activa del usuario, sus vectores nunca entran en el contexto de inferencia.
+
+---
+
+## Configuración y límites de almacenamiento (`SettingsPage`)
+
+Vista accesible desde el ítem **Configuración** (`ti-settings`) al final del NAV del sidebar. Layout de una sola columna centrada, `max-width: 720px`.
+
+### Sección Plan
+
+Muestra el plan activo (**Plan Free**) con badge azul y sus características:
+- 1 GB de almacenamiento
+- Documentos ilimitados
+- 1 empresa
+
+Botón "Actualizar plan" (decorativo en prototipo) a la derecha.
+
+### Sección Almacenamiento
+
+Carga datos del servidor con `apiGetStorage(slug)` al montar / cuando cambia `activeCo`.
+
+**Titular de uso:**
+```
+46.0 MB  de 1 GB usados
+```
+
+**Barra de progreso** estilo Google Drive:
+- Ancho: `(totalBytes / limitBytes) * 100%` con `transition: width 0.4s ease`
+- Color normal: `C.accent` (azul)
+- Color advertencia (≥ 90%): `#dc2626` (rojo)
+- Etiquetas: `X% utilizado` · `Y disponible`
+- Alerta visual si supera el 100%: banner rojo "Has alcanzado el límite de tu plan"
+
+**Desglose por tipo** — una fila por cada tipo de archivo presente:
+
+| Columna | Contenido |
+|---------|-----------|
+| Ícono | `TYPE_ICON` + `TYPE_COLOR` del tipo |
+| Nombre | PDF / Excel / CSV / Word / Texto |
+| Cantidad | N documentos |
+| Tamaño | `formatBytes(bytes)` |
+| Mini-barra | % del espacio total que ocupa ese tipo |
+
+**Footer:** `Total: N documentos · X MB`
+
+### Función `formatBytes(b)`
+
+```js
+const formatBytes = b => {
+  if (b >= 1073741824) return (b/1073741824).toFixed(1)+' GB';
+  if (b >= 1048576)    return (b/1048576).toFixed(1)+' MB';
+  if (b >= 1024)       return (b/1024).toFixed(1)+' KB';
+  return b+' B';
+};
+```
+
+### Endpoint `GET /api/storage`
+
+```
+GET /api/storage?company_id=<slug>
+```
+
+Query SQLite:
+```sql
+SELECT type, COUNT(*) as count, SUM(size_bytes) as bytes
+FROM files WHERE company_id=? GROUP BY type
+```
+
+Respuesta:
+```json
+{
+  "totalBytes": 48234112,
+  "limitBytes": 1073741824,
+  "byType": {
+    "pdf":  { "count": 12, "bytes": 30000000 },
+    "xlsx": { "count": 8,  "bytes": 15000000 }
+  },
+  "totalDocs": 20
+}
+```
+
+`limitBytes` es la constante `1073741824` (1 GB) fija en el servidor — corresponde al plan free.
