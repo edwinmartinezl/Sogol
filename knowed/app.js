@@ -102,6 +102,15 @@ async function apiGetStorage(companyId) {
   return res.json();
 }
 
+async function apiChatQuery(companyId, fileIds, question) {
+  const res = await fetch(`${API_BASE}/chat/query`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ company_id: companyId, file_ids: fileIds, question }),
+  });
+  return res.json();
+}
+
 const normalizeReal = r => ({
   id:         r.id,
   name:       r.original_name,
@@ -114,8 +123,8 @@ const normalizeReal = r => ({
   area:       'Upload',
   date:       r.uploaded_at?.slice(0, 10) || '',
   isReal:     true,
-  chunks:     r.chunks || Math.max(5, Math.floor((r.size_bytes||0) / 1000)),
-  vectorized: 1,
+  chunks:     r.chunks || 0,
+  vectorized: r.vectorized ?? 0,
   _deptId:    r.dept_id  || null,
   _groupId:   r.group_id || null,
 });
@@ -187,10 +196,11 @@ function TypeBadge({ type }) {
 // ── Message bubble ────────────────────────────────────────────────────────────
 
 function MessageBubble({ msg }) {
-  const isUser  = msg.role === 'user';
-  const srcDocs = msg.sources
+  const isUser   = msg.role === 'user';
+  const srcDocs  = msg.sources
     ? msg.sources.map(id => documents.find(d => d.id === id)).filter(Boolean)
     : [];
+  const srcNames = msg.sourceNames || [];
 
   return (
     <div style={{
@@ -205,8 +215,19 @@ function MessageBubble({ msg }) {
           borderRadius: isUser ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
           background: isUser ? C.accent : C.surface,
           color: isUser ? '#fff' : C.text,
+          minWidth: msg.loading ? '64px' : undefined,
         }}>
-          {msg.text}
+          {msg.loading ? (
+            <div style={{ display:'flex', gap:'5px', alignItems:'center', padding:'3px 0' }}>
+              {[0,1,2].map(i => (
+                <span key={i} style={{
+                  display:'inline-block', width:'6px', height:'6px',
+                  borderRadius:'50%', background:C.muted,
+                  animation:`ragdot 1.2s ease-in-out ${i*0.18}s infinite`,
+                }} />
+              ))}
+            </div>
+          ) : msg.text}
           {msg.insight && (
             <div style={{
               marginTop:'10px', padding:'10px 12px',
@@ -220,13 +241,23 @@ function MessageBubble({ msg }) {
             </div>
           )}
         </div>
-        {srcDocs.length > 0 && (
+        {(srcDocs.length > 0 || srcNames.length > 0) && (
           <div style={{ display:'flex', gap:'4px', marginTop:'6px', flexWrap:'wrap' }}>
             {srcDocs.map(doc => (
               <span key={doc.id} style={{
                 fontSize:'10px', padding:'2px 8px', borderRadius:'10px',
                 background:C.surface, border:C.border, color:C.muted, whiteSpace:'nowrap',
               }}>{doc.name}</span>
+            ))}
+            {srcNames.map((name, i) => (
+              <span key={'sn'+i} style={{
+                fontSize:'10px', padding:'2px 8px', borderRadius:'10px',
+                background:C.surface, border:C.border, color:C.muted, whiteSpace:'nowrap',
+                display:'inline-flex', alignItems:'center', gap:'3px',
+              }}>
+                <i className="ti ti-file-text" style={{ fontSize:'9px' }} />
+                {name}
+              </span>
             ))}
           </div>
         )}
@@ -2168,6 +2199,7 @@ function ChatPage({ selected, onRemove, llm, onLlmChange, onTrackQuery, companie
   const [messages,      setMessages]      = useState([]);
   const [input,         setInput]         = useState('');
   const [attachments,   setAttachments]   = useState([]);
+  const [ragLoading,    setRagLoading]    = useState(false);
   const [showUploadDest, setShowUploadDest] = useState(false);
   const [uploadDest,    setUploadDest]    = useState(null);
   const [chatVecModal,  setChatVecModal]  = useState(null);
@@ -2253,20 +2285,47 @@ function ChatPage({ selected, onRemove, llm, onLlmChange, onTrackQuery, companie
     bottomRef.current?.scrollIntoView({ behavior:'smooth' });
   }, [messages]);
 
-  const send = () => {
+  const send = async () => {
     const text = input.trim();
-    if (!text) return;
-    const n = selected.length;
-    const aiText = n > 0
-      ? `Analizando ${n} documento${n!==1?'s':''} en contexto… he encontrado patrones relevantes.`
-      : 'No tengo documentos en contexto. Selecciona documentos desde la página Documents para hacer preguntas específicas sobre tu información.';
-    setMessages(prev => [
-      ...prev,
-      { role:'user', text },
-      { role:'ai', text:aiText, sources: n > 0 ? [...selected] : [] },
-    ]);
-    if (n > 0) onTrackQuery([...selected]);
-    setInput(''); setAttachments([]);
+    if (!text || ragLoading) return;
+
+    // Filtrar solo documentos reales (ya subidos al servidor)
+    const realSel = selected.filter(id => (allRealDocs||[]).some(d => d.id === id));
+
+    setMessages(prev => [...prev, { role:'user', text }]);
+    setInput('');
+    setAttachments([]);
+
+    if (realSel.length === 0) {
+      const msg = selected.length > 0
+        ? 'Los documentos seleccionados aún no están vectorizados. Espera unos segundos y vuelve a intentarlo.'
+        : 'Selecciona documentos desde la página Documents para hacer preguntas sobre tu información.';
+      setMessages(prev => [...prev, { role:'ai', text: msg }]);
+      return;
+    }
+
+    const msgId = Date.now();
+    setRagLoading(true);
+    setMessages(prev => [...prev, { role:'ai', text:'', loading:true, _id:msgId }]);
+
+    try {
+      const compSlug = coSlug(activeCo, companies);
+      const data = await apiChatQuery(compSlug, realSel, text);
+      setMessages(prev => prev.map(m =>
+        (m.loading && m._id === msgId)
+          ? { role:'ai', text: data.answer || 'Sin respuesta.', sourceNames: data.sources || [] }
+          : m
+      ));
+      onTrackQuery(realSel);
+    } catch {
+      setMessages(prev => prev.map(m =>
+        (m.loading && m._id === msgId)
+          ? { role:'ai', text:'No se pudo conectar con el servicio RAG. Verifica que esté activo en el puerto 3002.' }
+          : m
+      ));
+    } finally {
+      setRagLoading(false);
+    }
   };
 
   const onKeyDown = e => {
@@ -2414,14 +2473,17 @@ function ChatPage({ selected, onRemove, llm, onLlmChange, onTrackQuery, companie
                 }}>
                   <i className="ti ti-microphone" style={{ fontSize:'14px' }} />
                 </button>
-                <button onClick={send} disabled={!input.trim()} style={{
+                <button onClick={send} disabled={!input.trim() || ragLoading} style={{
                   width:'32px', height:'32px', borderRadius:'50%', border:'none',
-                  background: input.trim() ? C.accent : '#d1d1d6',
-                  cursor: input.trim() ? 'pointer' : 'default',
+                  background: (input.trim() && !ragLoading) ? C.accent : '#d1d1d6',
+                  cursor: (input.trim() && !ragLoading) ? 'pointer' : 'default',
                   display:'flex', alignItems:'center', justifyContent:'center',
                   transition:'background .15s',
                 }}>
-                  <i className="ti ti-arrow-up" style={{ fontSize:'14px', color:'#fff' }} />
+                  {ragLoading
+                    ? <i className="ti ti-loader-2" style={{ fontSize:'14px', color:'#fff', animation:'spin 1s linear infinite' }} />
+                    : <i className="ti ti-arrow-up" style={{ fontSize:'14px', color:'#fff' }} />
+                  }
                 </button>
               </div>
             </div>

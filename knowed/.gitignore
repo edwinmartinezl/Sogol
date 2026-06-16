@@ -1,3 +1,7 @@
 node_modules/
 knowlayer.db
 clientes/
+.env
+chromadb/
+__pycache__/
+*.pyc

@@ -89,6 +89,34 @@ function readBody(req) {
   });
 }
 
+// ── RAG microservice helper (port 3002) ───────────────────────────────────────
+
+function callRag(method, ragPath, body) {
+  return new Promise((resolve, reject) => {
+    const data = (body && method !== 'GET' && method !== 'DELETE')
+      ? JSON.stringify(body) : null;
+    const opts = {
+      hostname: '127.0.0.1', port: 3002,
+      path: ragPath, method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
+      },
+    };
+    const req = http.request(opts, r => {
+      const chunks = [];
+      r.on('data', c => chunks.push(c));
+      r.on('end', () => {
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString())); }
+        catch { resolve(null); }
+      });
+    });
+    req.on('error', reject);
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
 // ── Server ────────────────────────────────────────────────────────────────────
 
 const server = http.createServer(async (req, res) => {
@@ -153,7 +181,6 @@ const server = http.createServer(async (req, res) => {
       }
 
       const size_bytes = fileData.buffer.length;
-      const chunks     = Math.max(5, Math.floor(size_bytes / 1000));
       const record = {
         id,
         client_id,
@@ -166,8 +193,8 @@ const server = http.createServer(async (req, res) => {
         dept_id:       null,
         group_id:      null,
         uploaded_at:   new Date().toISOString(),
-        vectorized:    1,
-        chunks,
+        vectorized:    0,
+        chunks:        0,
       };
 
       db.prepare(`
@@ -180,6 +207,25 @@ const server = http.createServer(async (req, res) => {
       `).run(record);
 
       console.log(`[upload] ${record.original_name} → ${stored_name}`);
+
+      // Vectorización asíncrona — no bloquea la respuesta al cliente
+      setImmediate(async () => {
+        try {
+          const result = await callRag('POST', '/ingest', {
+            file_id:    id,
+            file_path:  dest,
+            company_id: fields.company_id,
+            file_name:  fileData.filename,
+          });
+          const chunks = result?.chunks ?? 0;
+          db.prepare('UPDATE files SET vectorized=?, chunks=? WHERE id=?')
+            .run(chunks > 0 ? 1 : 2, chunks, id);
+          console.log(`[rag]    ${fileData.filename} → ${chunks} chunks`);
+        } catch (e) {
+          db.prepare('UPDATE files SET vectorized=2 WHERE id=?').run(id);
+          console.log(`[rag]    ${fileData.filename} → error: ${e.message}`);
+        }
+      });
       sendJson(res, 201, record);
     });
 
@@ -227,6 +273,9 @@ const server = http.createServer(async (req, res) => {
     try { fs.unlinkSync(row.path_on_disk); } catch { /* already gone */ }
     db.prepare('DELETE FROM files WHERE id=?').run(id);
     console.log(`[delete] ${row.original_name}`);
+    // Borrar vectores del RAG service (fire-and-forget)
+    callRag('DELETE', `/ingest/${encodeURIComponent(id)}?company_id=${encodeURIComponent(row.company_id)}`)
+      .catch(() => {});
     return sendJson(res, 200, { deleted: id });
   }
 
@@ -330,6 +379,32 @@ const server = http.createServer(async (req, res) => {
     });
 
     return sendJson(res, 200, { totalBytes, limitBytes: LIMIT, byType, totalDocs });
+  }
+
+  // ── POST /api/chat/query ─────────────────────────────────────────────────
+  if (req.method === 'POST' && pathname === '/api/chat/query') {
+    let payload;
+    try { payload = JSON.parse(await readBody(req)); }
+    catch { return sendJson(res, 400, { error: 'Invalid JSON' }); }
+    const { company_id, file_ids = [], question } = payload || {};
+    if (!company_id || !question)
+      return sendJson(res, 400, { error: 'company_id and question required' });
+    try {
+      const result = await callRag('POST', '/query', { company_id, file_ids, question });
+      return sendJson(res, 200, result);
+    } catch (e) {
+      return sendJson(res, 503, { error: 'RAG service unavailable: ' + e.message });
+    }
+  }
+
+  // ── GET /api/rag/status ────────────────────────────────────────────────────
+  if (req.method === 'GET' && pathname === '/api/rag/status') {
+    try {
+      const result = await callRag('GET', '/status');
+      return sendJson(res, 200, result || { ok: false });
+    } catch {
+      return sendJson(res, 503, { ok: false, error: 'RAG service offline' });
+    }
   }
 
   // ── GET /api/ping ─────────────────────────────────────────────────────────
