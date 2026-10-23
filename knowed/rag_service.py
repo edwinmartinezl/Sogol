@@ -185,6 +185,13 @@ def query(req: QueryReq):
     docs   = results['documents'][0]
     metas  = results['metadatas'][0]
 
+    if not docs:
+        return {
+            'answer':  'El documento seleccionado aún no tiene vectores en ChromaDB. '
+                       'Espera a que termine la vectorización (badge VEC verde) y vuelve a preguntar.',
+            'sources': [],
+        }
+
     context = '\n\n---\n'.join(
         f'[{m["file_name"]}]\n{d}' for d, m in zip(docs, metas)
     )
@@ -203,12 +210,22 @@ def query(req: QueryReq):
         r = requests.post(
             f'{OLLAMA_URL}/api/generate',
             json={'model': OLLAMA_MODEL, 'prompt': prompt, 'stream': False},
-            timeout=120,
+            timeout=180,
         )
         r.raise_for_status()
-        answer = r.json().get('response', '').strip()
+        payload = r.json()
+        answer  = payload.get('response', '').strip()
+        if not answer:
+            # El modelo devolvió vacío — puede ser timeout del modelo cloud o error silencioso
+            raise HTTPException(
+                status_code=502,
+                detail=f'Ollama devolvió respuesta vacía. Modelo: {OLLAMA_MODEL}. '
+                       f'Verifica con: ollama run {OLLAMA_MODEL}'
+            )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f'Ollama no disponible: {e}')
+        raise HTTPException(status_code=503, detail=f'No se pudo conectar a Ollama en {OLLAMA_URL}: {e}')
 
     sources = list({m['file_name'] for m in metas})
     return {'answer': answer, 'sources': sources}

@@ -4,6 +4,19 @@ const fs     = require('fs');
 const path   = require('path');
 const crypto = require('crypto');
 
+// Cargar .env antes de importar rag.js
+try {
+  const envPath = path.join(__dirname, '.env');
+  if (fs.existsSync(envPath)) {
+    fs.readFileSync(envPath, 'utf8').split('\n').forEach(line => {
+      const [k, ...v] = line.trim().split('=');
+      if (k && v.length && !process.env[k]) process.env[k] = v.join('=');
+    });
+  }
+} catch {}
+
+const rag = require('./rag');
+
 let Database, busboy;
 try { Database = require('better-sqlite3'); } catch {
   console.error('Run: npm install better-sqlite3 busboy'); process.exit(1);
@@ -23,6 +36,25 @@ const db = new Database(DB_PATH);
 // Migration: add columns to existing DBs
 try { db.exec(`ALTER TABLE files ADD COLUMN vectorized INTEGER DEFAULT 1`); } catch {}
 try { db.exec(`ALTER TABLE files ADD COLUMN chunks INTEGER DEFAULT 0`);     } catch {}
+db.exec(`
+  CREATE TABLE IF NOT EXISTS conversations (
+    id         TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL,
+    title      TEXT NOT NULL DEFAULT 'Nueva conversación',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS chat_messages (
+    id              TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    role            TEXT NOT NULL,
+    content         TEXT NOT NULL,
+    sources         TEXT,
+    created_at      TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_convs_co  ON conversations(company_id);
+  CREATE INDEX IF NOT EXISTS idx_msgs_conv ON chat_messages(conversation_id);
+`);
 db.exec(`
   CREATE TABLE IF NOT EXISTS files (
     id            TEXT PRIMARY KEY,
@@ -211,7 +243,7 @@ const server = http.createServer(async (req, res) => {
       // Vectorización asíncrona — no bloquea la respuesta al cliente
       setImmediate(async () => {
         try {
-          const result = await callRag('POST', '/ingest', {
+          const result = await rag.ingest(db, {
             file_id:    id,
             file_path:  dest,
             company_id: fields.company_id,
@@ -273,9 +305,8 @@ const server = http.createServer(async (req, res) => {
     try { fs.unlinkSync(row.path_on_disk); } catch { /* already gone */ }
     db.prepare('DELETE FROM files WHERE id=?').run(id);
     console.log(`[delete] ${row.original_name}`);
-    // Borrar vectores del RAG service (fire-and-forget)
-    callRag('DELETE', `/ingest/${encodeURIComponent(id)}?company_id=${encodeURIComponent(row.company_id)}`)
-      .catch(() => {});
+    // Borrar vectores de SQLite
+    try { rag.deleteVectors(db, id); } catch {}
     return sendJson(res, 200, { deleted: id });
   }
 
@@ -381,6 +412,68 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { totalBytes, limitBytes: LIMIT, byType, totalDocs });
   }
 
+  // ── GET /api/conversations?company_id= ───────────────────────────────────
+  if (req.method === 'GET' && pathname === '/api/conversations') {
+    const company_id = qp.get('company_id');
+    if (!company_id) return sendJson(res, 400, { error: 'company_id required' });
+    const rows = db.prepare(
+      'SELECT * FROM conversations WHERE company_id=? ORDER BY updated_at DESC'
+    ).all(company_id);
+    return sendJson(res, 200, rows);
+  }
+
+  // ── POST /api/conversations ────────────────────────────────────────────────
+  if (req.method === 'POST' && pathname === '/api/conversations') {
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return sendJson(res, 400, { error: 'Invalid JSON' }); }
+    const { company_id, title = 'Nueva conversación' } = body || {};
+    if (!company_id) return sendJson(res, 400, { error: 'company_id required' });
+    const now = new Date().toISOString();
+    const record = { id: crypto.randomUUID(), company_id, title, created_at: now, updated_at: now };
+    db.prepare('INSERT INTO conversations (id,company_id,title,created_at,updated_at) VALUES (@id,@company_id,@title,@created_at,@updated_at)').run(record);
+    return sendJson(res, 201, record);
+  }
+
+  // ── PATCH /api/conversations/:id ──────────────────────────────────────────
+  if (req.method === 'PATCH' && /^\/api\/conversations\/[^/]+$/.test(pathname)) {
+    const convId = pathname.split('/').pop();
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return sendJson(res, 400, { error: 'Invalid JSON' }); }
+    const now = new Date().toISOString();
+    if (body.title) db.prepare('UPDATE conversations SET title=?,updated_at=? WHERE id=?').run(body.title, now, convId);
+    else db.prepare('UPDATE conversations SET updated_at=? WHERE id=?').run(now, convId);
+    return sendJson(res, 200, db.prepare('SELECT * FROM conversations WHERE id=?').get(convId) || {});
+  }
+
+  // ── DELETE /api/conversations/:id ─────────────────────────────────────────
+  if (req.method === 'DELETE' && /^\/api\/conversations\/[^/]+$/.test(pathname)) {
+    const convId = pathname.split('/').pop();
+    db.prepare('DELETE FROM chat_messages WHERE conversation_id=?').run(convId);
+    db.prepare('DELETE FROM conversations WHERE id=?').run(convId);
+    return sendJson(res, 200, { deleted: convId });
+  }
+
+  // ── GET /api/conversations/:id/messages ───────────────────────────────────
+  if (req.method === 'GET' && /^\/api\/conversations\/[^/]+\/messages$/.test(pathname)) {
+    const convId = pathname.split('/')[3];
+    const rows = db.prepare('SELECT * FROM chat_messages WHERE conversation_id=? ORDER BY created_at ASC').all(convId);
+    return sendJson(res, 200, rows.map(r => ({ ...r, sources: r.sources ? JSON.parse(r.sources) : [] })));
+  }
+
+  // ── POST /api/conversations/:id/messages ──────────────────────────────────
+  if (req.method === 'POST' && /^\/api\/conversations\/[^/]+\/messages$/.test(pathname)) {
+    const convId = pathname.split('/')[3];
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return sendJson(res, 400, { error: 'Invalid JSON' }); }
+    const { role, content, sources = [] } = body || {};
+    if (!role || !content) return sendJson(res, 400, { error: 'role and content required' });
+    const now = new Date().toISOString();
+    const record = { id: crypto.randomUUID(), conversation_id: convId, role, content, sources: JSON.stringify(sources), created_at: now };
+    db.prepare('INSERT INTO chat_messages (id,conversation_id,role,content,sources,created_at) VALUES (@id,@conversation_id,@role,@content,@sources,@created_at)').run(record);
+    db.prepare('UPDATE conversations SET updated_at=? WHERE id=?').run(now, convId);
+    return sendJson(res, 201, { ...record, sources });
+  }
+
   // ── POST /api/chat/query ─────────────────────────────────────────────────
   if (req.method === 'POST' && pathname === '/api/chat/query') {
     let payload;
@@ -390,21 +483,16 @@ const server = http.createServer(async (req, res) => {
     if (!company_id || !question)
       return sendJson(res, 400, { error: 'company_id and question required' });
     try {
-      const result = await callRag('POST', '/query', { company_id, file_ids, question });
+      const result = await rag.query(db, { company_id, file_ids, question });
       return sendJson(res, 200, result);
     } catch (e) {
-      return sendJson(res, 503, { error: 'RAG service unavailable: ' + e.message });
+      return sendJson(res, 503, { error: e.message });
     }
   }
 
   // ── GET /api/rag/status ────────────────────────────────────────────────────
   if (req.method === 'GET' && pathname === '/api/rag/status') {
-    try {
-      const result = await callRag('GET', '/status');
-      return sendJson(res, 200, result || { ok: false });
-    } catch {
-      return sendJson(res, 503, { ok: false, error: 'RAG service offline' });
-    }
+    return sendJson(res, 200, rag.status(db));
   }
 
   // ── GET /api/ping ─────────────────────────────────────────────────────────

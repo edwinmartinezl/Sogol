@@ -111,6 +111,40 @@ async function apiChatQuery(companyId, fileIds, question) {
   return res.json();
 }
 
+async function apiGetConversations(companyId) {
+  const res = await fetch(`${API_BASE}/conversations?company_id=${encodeURIComponent(companyId)}`);
+  return res.json();
+}
+async function apiCreateConversation(companyId, title) {
+  const res = await fetch(`${API_BASE}/conversations`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ company_id: companyId, title }),
+  });
+  return res.json();
+}
+async function apiUpdateConvTitle(convId, title) {
+  const res = await fetch(`${API_BASE}/conversations/${convId}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  return res.json();
+}
+async function apiDeleteConversation(convId) {
+  const res = await fetch(`${API_BASE}/conversations/${convId}`, { method: 'DELETE' });
+  return res.json();
+}
+async function apiGetConvMessages(convId) {
+  const res = await fetch(`${API_BASE}/conversations/${convId}/messages`);
+  return res.json();
+}
+async function apiSaveMessage(convId, role, content, sources) {
+  const res = await fetch(`${API_BASE}/conversations/${convId}/messages`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role, content, sources: sources || [] }),
+  });
+  return res.json();
+}
+
 const normalizeReal = r => ({
   id:         r.id,
   name:       r.original_name,
@@ -286,6 +320,7 @@ const DOC_SECTIONS = {};
 
 function DocItem({ doc, selected, onToggle }) {
   const isSel = selected.includes(doc.id);
+  const vecStatus = doc.isReal ? (doc.vectorized ?? 0) : 1;
   return (
     <div onClick={() => onToggle(doc.id)} style={{
       display:'flex', alignItems:'center', gap:'7px',
@@ -299,6 +334,16 @@ function DocItem({ doc, selected, onToggle }) {
         fontSize:'12px', color:C.text,
         overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1,
       }}>{doc.name}</span>
+      {vecStatus === 0 && (
+        <span title="Vectorizando…" style={{
+          width:'6px', height:'6px', borderRadius:'50%', flexShrink:0,
+          background:'#f59e0b', animation:'ragdot 1.2s ease-in-out infinite',
+        }} />
+      )}
+      {vecStatus === 2 && (
+        <i className="ti ti-alert-triangle" title="Error al vectorizar"
+           style={{ fontSize:'10px', color:'#ef4444', flexShrink:0 }} />
+      )}
       {isSel && <i className="ti ti-check" style={{ fontSize:'11px', color:C.accent, flexShrink:0 }} />}
     </div>
   );
@@ -361,13 +406,32 @@ function ChatSessionItem({ session, selected, onToggle, isActive, onActivate }) 
   );
 }
 
-function Sidebar({ page, onNav, selected, onToggle }) {
-  const [search,        setSearch]        = useState('');
-  const [activeSession, setActiveSession] = useState(null);
-  const thisMonth       = documents.filter(d => isThisMonth(d.date));
-  const filteredSessions = CHAT_SESSIONS.filter(s =>
-    s.preview.toLowerCase().includes(search.toLowerCase())
+function Sidebar({ page, onNav, selected, onToggle, conversations, activeConvId, onSelectConv, onNewChat, onDeleteConv }) {
+  const [search, setSearch] = useState('');
+
+  const filtered = (conversations || []).filter(c =>
+    c.title.toLowerCase().includes(search.toLowerCase())
   );
+
+  // Agrupar por fecha
+  const groups = React.useMemo(() => {
+    const now  = new Date();
+    const today = now.toDateString();
+    const yest  = new Date(now - 86400000).toDateString();
+    const week  = new Date(now - 7 * 86400000);
+    const mon   = new Date(now - 30 * 86400000);
+    const buckets = { 'Hoy': [], 'Ayer': [], 'Últimos 7 días': [], 'Últimos 30 días': [], 'Anterior': [] };
+    filtered.forEach(c => {
+      const d  = new Date(c.updated_at);
+      const ds = d.toDateString();
+      if (ds === today)    buckets['Hoy'].push(c);
+      else if (ds === yest) buckets['Ayer'].push(c);
+      else if (d >= week)  buckets['Últimos 7 días'].push(c);
+      else if (d >= mon)   buckets['Últimos 30 días'].push(c);
+      else                 buckets['Anterior'].push(c);
+    });
+    return Object.entries(buckets).filter(([, v]) => v.length > 0);
+  }, [filtered]);
 
   return (
     <div style={{
@@ -405,47 +469,75 @@ function Sidebar({ page, onNav, selected, onToggle }) {
         ))}
       </nav>
 
+      {/* Historial de chats */}
       <div style={{ flex:1, overflow:'auto', paddingTop:'4px', borderTop:C.border, marginTop:'8px' }}>
-        {thisMonth.length > 0 && (
-          <>
-            <div style={{
-              fontSize:'10px', fontWeight:600, color:C.muted,
-              textTransform:'uppercase', letterSpacing:'0.8px', padding:'10px 20px 3px',
-            }}>This month</div>
-            {thisMonth.map(doc => (
-              <DocItem key={doc.id} doc={doc} selected={selected} onToggle={onToggle} />
-            ))}
-          </>
-        )}
-        <>
-          <div style={{
-            fontSize:'10px', fontWeight:600, color:C.muted,
-            textTransform:'uppercase', letterSpacing:'0.8px', padding:'10px 20px 3px',
-          }}>Older</div>
-          <div style={{ padding:'4px 10px 6px', position:'relative' }}>
-            <i className="ti ti-search" style={{
-              position:'absolute', left:'18px', top:'50%', transform:'translateY(-50%)',
-              fontSize:'12px', color:C.muted, pointerEvents:'none',
-            }} />
-            <input type="text" placeholder="Search chats…" value={search}
-              onChange={e => setSearch(e.target.value)}
-              style={{
-                width:'100%', boxSizing:'border-box',
-                padding:'4px 8px 4px 26px', fontSize:'11px',
-                background:C.bg, border:C.border, borderRadius:'6px',
-                color:C.text, outline:'none', fontFamily:C.font,
-              }}
-            />
+        {/* Botón nuevo chat */}
+        <div style={{ padding:'4px 8px 6px' }}>
+          <button onClick={onNewChat} style={{
+            width:'100%', display:'flex', alignItems:'center', gap:'7px',
+            background:'transparent', border:C.border, borderRadius:'7px',
+            padding:'5px 10px', fontSize:'12px', color:C.muted, cursor:'pointer',
+            fontFamily:C.font,
+          }}>
+            <i className="ti ti-plus" style={{ fontSize:'13px' }} />
+            Nuevo chat
+          </button>
+        </div>
+        {/* Búsqueda */}
+        <div style={{ padding:'2px 8px 4px', position:'relative' }}>
+          <i className="ti ti-search" style={{
+            position:'absolute', left:'16px', top:'50%', transform:'translateY(-50%)',
+            fontSize:'12px', color:C.muted, pointerEvents:'none',
+          }} />
+          <input type="text" placeholder="Buscar chats…" value={search}
+            onChange={e => setSearch(e.target.value)}
+            style={{
+              width:'100%', boxSizing:'border-box',
+              padding:'4px 8px 4px 26px', fontSize:'11px',
+              background:C.bg, border:C.border, borderRadius:'6px',
+              color:C.text, outline:'none', fontFamily:C.font,
+            }}
+          />
+        </div>
+        {/* Lista de conversaciones agrupadas */}
+        {groups.length === 0 ? (
+          <div style={{ textAlign:'center', padding:'16px', color:C.muted, fontSize:'11px' }}>
+            {search ? 'Sin resultados' : 'Sin historial de chats'}
           </div>
-          {filteredSessions.length > 0
-            ? filteredSessions.map(session => (
-                <ChatSessionItem key={session.id} session={session} selected={selected} onToggle={onToggle} isActive={activeSession===session.id} onActivate={() => setActiveSession(session.id)} />
-              ))
-            : <div style={{ textAlign:'center', padding:'16px', color:C.muted, fontSize:'12px' }}>No chats found</div>
-          }
-        </>
+        ) : groups.map(([label, convs]) => (
+          <div key={label}>
+            <div style={{
+              fontSize:'9px', fontWeight:700, color:C.muted, letterSpacing:'0.07em',
+              textTransform:'uppercase', padding:'8px 14px 2px',
+            }}>{label}</div>
+            {convs.map(c => (
+              <div key={c.id} style={{ position:'relative', margin:'0 6px 1px' }}
+                className="conv-item-wrap">
+                <button onClick={() => onSelectConv(c.id)} style={{
+                  width:'100%', textAlign:'left',
+                  background: c.id === activeConvId ? C.accent+'14' : 'transparent',
+                  border: c.id === activeConvId ? '0.5px solid '+C.accent+'35' : '0.5px solid transparent',
+                  borderRadius:'6px', padding:'5px 24px 5px 8px',
+                  fontSize:'12px', color: c.id === activeConvId ? C.accent : C.text,
+                  cursor:'pointer', fontFamily:C.font, lineHeight:'1.3',
+                  whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+                }}>
+                  <i className="ti ti-message-circle" style={{ fontSize:'11px', marginRight:'5px', opacity:0.6 }} />
+                  {c.title}
+                </button>
+                <button onClick={e => { e.stopPropagation(); onDeleteConv(c.id); }} style={{
+                  position:'absolute', right:'4px', top:'50%', transform:'translateY(-50%)',
+                  background:'transparent', border:'none', color:C.muted,
+                  cursor:'pointer', padding:'2px 3px', borderRadius:'4px',
+                  fontSize:'11px', opacity:0, transition:'opacity 0.15s',
+                }} className="conv-del-btn" title="Eliminar chat">
+                  <i className="ti ti-trash" />
+                </button>
+              </div>
+            ))}
+          </div>
+        ))}
       </div>
-
     </div>
   );
 }
@@ -1155,8 +1247,8 @@ function DocumentsPage({ selected, onToggle, onClearAll, onSetSelected, activeCo
     }).catch(() => {});
 
     // Load real files
-    apiGetFiles(slug).then(rows => {
-      if (!Array.isArray(rows)) return;
+    const loadFiles = () => apiGetFiles(slug).then(rows => {
+      if (!Array.isArray(rows)) return false;
       const norm = rows.map(normalizeReal);
       setRealDocs(norm);
       onRealDocsChange?.(norm);
@@ -1167,7 +1259,17 @@ function DocumentsPage({ selected, onToggle, onClearAll, onSetSelected, activeCo
         });
         return next;
       });
-    }).catch(() => {});
+      return norm.some(d => d.vectorized === 0); // true si hay pendientes
+    }).catch(() => false);
+
+    let pollTimer = null;
+    const startPoll = () => {
+      loadFiles().then(hasPending => {
+        if (hasPending) pollTimer = setTimeout(startPoll, 3000);
+      });
+    };
+    startPoll();
+    return () => { if (pollTimer) clearTimeout(pollTimer); };
   }, [activeCo]);
 
   useEffect(() => {
@@ -1401,7 +1503,18 @@ function DocumentsPage({ selected, onToggle, onClearAll, onSetSelected, activeCo
           <i className={'ti '+(TYPE_ICON[doc.type]||'ti-file')} style={{ fontSize:'18px', color:TYPE_COLOR[doc.type] }} />
           <div style={{ display:'flex', alignItems:'center', gap:'5px' }}>
             <TypeBadge type={doc.type} />
-            {doc.isReal && <span style={{ fontSize:'9px', fontWeight:700, padding:'1px 5px', borderRadius:'4px', color:'#1a7a4a', background:'#1a7a4a18', textTransform:'uppercase', letterSpacing:'0.4px' }}>Real</span>}
+            {doc.isReal && doc.vectorized === 0 && (
+              <span style={{ fontSize:'9px', fontWeight:700, padding:'1px 5px', borderRadius:'4px', color:'#92400e', background:'#fef3c7', textTransform:'uppercase', letterSpacing:'0.4px', display:'inline-flex', alignItems:'center', gap:'3px' }}>
+                <span style={{ width:'4px', height:'4px', borderRadius:'50%', background:'#f59e0b', animation:'ragdot 1.2s ease-in-out infinite', display:'inline-block' }} />
+                VEC…
+              </span>
+            )}
+            {doc.isReal && doc.vectorized === 1 && (
+              <span style={{ fontSize:'9px', fontWeight:700, padding:'1px 5px', borderRadius:'4px', color:'#1a7a4a', background:'#d1fae5', textTransform:'uppercase', letterSpacing:'0.4px' }}>VEC</span>
+            )}
+            {doc.isReal && doc.vectorized === 2 && (
+              <span style={{ fontSize:'9px', fontWeight:700, padding:'1px 5px', borderRadius:'4px', color:'#991b1b', background:'#fee2e2', textTransform:'uppercase', letterSpacing:'0.4px' }}>ERR</span>
+            )}
             <div style={{
               width:'14px', height:'14px', borderRadius:'3px', flexShrink:0,
               border: isSel ? 'none' : '0.5px solid #c7c7cc',
@@ -2195,7 +2308,8 @@ function MoveToModal({ doc, bulkDocs, departments, groups, currentAssign, onMove
 
 // ── Chat page ─────────────────────────────────────────────────────────────────
 
-function ChatPage({ selected, onRemove, llm, onLlmChange, onTrackQuery, companies, activeCo, onAddDoc, allRealDocs, onGoVisualize }) {
+function ChatPage({ selected, onRemove, llm, onLlmChange, onTrackQuery, companies, activeCo, onAddDoc, allRealDocs, onGoVisualize,
+  conversations, activeConvId, onSelectConv, onNewConv, onDeleteConv }) {
   const [messages,      setMessages]      = useState([]);
   const [input,         setInput]         = useState('');
   const [attachments,   setAttachments]   = useState([]);
@@ -2210,6 +2324,21 @@ function ChatPage({ selected, onRemove, llm, onLlmChange, onTrackQuery, companie
   const bgChatAnimRef   = useRef(null);
 
   const allDocPool = [...documents, ...(allRealDocs||[])];
+
+  const getCompSlug = () => {
+    const coId = activeCo || (companies && companies[0]?.id);
+    return coSlug(coId, companies || []);
+  };
+
+  // Cargar mensajes al cambiar de conversación activa
+  useEffect(() => {
+    if (!activeConvId) { setMessages([]); return; }
+    apiGetConvMessages(activeConvId).then(msgs => {
+      setMessages((msgs || []).map(m => ({
+        role: m.role, text: m.content, sourceNames: m.sources || [],
+      })));
+    });
+  }, [activeConvId]);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
@@ -2289,18 +2418,31 @@ function ChatPage({ selected, onRemove, llm, onLlmChange, onTrackQuery, companie
     const text = input.trim();
     if (!text || ragLoading) return;
 
-    // Filtrar solo documentos reales (ya subidos al servidor)
+    const compSlug = getCompSlug();
+
+    // Obtener o crear conversación
+    let convId = activeConvId;
+    if (!convId) {
+      convId = await onNewConv(text, compSlug);
+      if (!convId) {
+        setMessages(prev => [...prev, { role:'ai', text:'No hay empresa seleccionada. Elige una empresa en el encabezado.' }]);
+        return;
+      }
+    }
+
     const realSel = selected.filter(id => (allRealDocs||[]).some(d => d.id === id));
 
     setMessages(prev => [...prev, { role:'user', text }]);
     setInput('');
     setAttachments([]);
+    apiSaveMessage(convId, 'user', text, []);
 
     if (realSel.length === 0) {
       const msg = selected.length > 0
         ? 'Los documentos seleccionados aún no están vectorizados. Espera unos segundos y vuelve a intentarlo.'
         : 'Selecciona documentos desde la página Documents para hacer preguntas sobre tu información.';
       setMessages(prev => [...prev, { role:'ai', text: msg }]);
+      apiSaveMessage(convId, 'ai', msg, []);
       return;
     }
 
@@ -2311,18 +2453,25 @@ function ChatPage({ selected, onRemove, llm, onLlmChange, onTrackQuery, companie
     try {
       const compSlug = coSlug(activeCo, companies);
       const data = await apiChatQuery(compSlug, realSel, text);
+      const answer = data.error
+        ? `Error RAG: ${data.error}`
+        : (data.answer || 'Ollama no devolvió respuesta. Verifica que el modelo esté descargado y activo.');
+      const srcs = data.sources || [];
       setMessages(prev => prev.map(m =>
         (m.loading && m._id === msgId)
-          ? { role:'ai', text: data.answer || 'Sin respuesta.', sourceNames: data.sources || [] }
+          ? { role:'ai', text: answer, sourceNames: srcs }
           : m
       ));
-      onTrackQuery(realSel);
-    } catch {
+      apiSaveMessage(convId, 'ai', answer, srcs);
+      if (!data.error) onTrackQuery(realSel);
+    } catch (err) {
+      const errMsg = `Sin conexión al servidor: ${err.message || 'network error'}`;
       setMessages(prev => prev.map(m =>
         (m.loading && m._id === msgId)
-          ? { role:'ai', text:'No se pudo conectar con el servicio RAG. Verifica que esté activo en el puerto 3002.' }
+          ? { role:'ai', text: errMsg }
           : m
       ));
+      apiSaveMessage(convId, 'ai', errMsg, []);
     } finally {
       setRagLoading(false);
     }
@@ -2461,10 +2610,10 @@ function ChatPage({ selected, onRemove, llm, onLlmChange, onTrackQuery, companie
                   background:C.surface, color:C.text,
                   outline:'none', cursor:'pointer', fontFamily:C.font,
                 }}>
-                  <option value="claude">Claude 3.5</option>
-                  <option value="gpt4o">GPT-4o</option>
-                  <option value="gemini">Gemini</option>
-                  <option value="llama">Llama</option>
+                  <option value="ollama">Ollama · minimax-m3</option>
+                  <option value="claude" disabled>Claude 3.5 (próx.)</option>
+                  <option value="gpt4o" disabled>GPT-4o (próx.)</option>
+                  <option value="gemini" disabled>Gemini (próx.)</option>
                 </select>
                 <button style={{
                   width:'30px', height:'30px', borderRadius:'8px', border:C.border,
@@ -4545,7 +4694,7 @@ function App() {
   const [loggedIn,   setLoggedIn]   = useState(false);
   const [selected,   setSelected]   = useState([]);
   const [page,       setPage]       = useState('chat');
-  const [llm,        setLlm]        = useState('claude');
+  const [llm,        setLlm]        = useState('ollama');
   const [docStats,     setDocStats]     = useState({}); // { [id]: { queries, context } }
   const [savedGraphs,  setSavedGraphs]  = useState([]);
   const [companies,    setCompanies]    = useState([]);
@@ -4561,6 +4710,8 @@ function App() {
   const [appDepts,          setAppDepts]          = useState([]);
   const [appGroups,         setAppGroups]         = useState([]);
   const [appAssign,         setAppAssign]         = useState({});
+  const [conversations,     setConversations]     = useState([]);
+  const [activeConvId,      setActiveConvId]      = useState(null);
 
   const showAppToast = (msg, type = 'info') => {
     setAppToast({ msg, type });
@@ -4582,6 +4733,41 @@ function App() {
         showAppToast('Servidor offline — los datos no se guardarán. Ejecuta: node server.js', 'warn');
       });
   }, []);
+
+  // Cargar conversaciones cuando cambia la empresa activa
+  useEffect(() => {
+    const slug = coSlug(activeCo || (companies && companies[0]?.id), companies || []);
+    if (!slug) return;
+    apiGetConversations(slug).then(rows => {
+      setConversations(Array.isArray(rows) ? rows : []);
+    }).catch(() => {});
+  }, [activeCo, companies]);
+
+  const handleNewConv = async (firstMsg, compSlug) => {
+    if (!compSlug) return null;
+    const title = firstMsg ? firstMsg.slice(0, 60) + (firstMsg.length > 60 ? '…' : '') : 'Nueva conversación';
+    const conv = await apiCreateConversation(compSlug, title);
+    if (!conv || !conv.id) return null;
+    setConversations(prev => [conv, ...prev]);
+    setActiveConvId(conv.id);
+    return conv.id;
+  };
+
+  const handleSelectConv = convId => {
+    setActiveConvId(convId);
+    if (page !== 'chat') setPage('chat');
+  };
+
+  const handleDeleteConv = async convId => {
+    await apiDeleteConversation(convId);
+    setConversations(prev => prev.filter(c => c.id !== convId));
+    if (activeConvId === convId) setActiveConvId(null);
+  };
+
+  const handleNewChat = () => {
+    setActiveConvId(null);
+    setPage('chat');
+  };
 
   const switchCo = coId => setActiveCo(coId);
 
@@ -4682,7 +4868,11 @@ function App() {
           Servidor offline
         </div>
       )}
-      <Sidebar page={page} onNav={setPage} selected={selected} onToggle={toggle} />
+      <Sidebar
+        page={page} onNav={setPage} selected={selected} onToggle={toggle}
+        conversations={conversations} activeConvId={activeConvId}
+        onSelectConv={handleSelectConv} onNewChat={handleNewChat} onDeleteConv={handleDeleteConv}
+      />
       <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
         {page !== 'documents' && (
           <Topbar
@@ -4729,6 +4919,8 @@ function App() {
               llm={llm} onLlmChange={setLlm} onTrackQuery={trackQuery}
               companies={companies} activeCo={activeCo} onAddDoc={addDocToContext}
               allRealDocs={appRealDocs} onGoVisualize={onGoVisualize}
+              conversations={conversations} activeConvId={activeConvId}
+              onSelectConv={handleSelectConv} onNewConv={handleNewConv} onDeleteConv={handleDeleteConv}
             />
           )}
           {page === 'policies' && <PoliciesPage />}
